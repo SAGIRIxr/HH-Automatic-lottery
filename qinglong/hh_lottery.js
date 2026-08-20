@@ -1491,9 +1491,19 @@ function guardExit(lottery) {
         return stoppingPromise;
     };
 
+    // 青龙会通过 NODE_OPTIONS 预加载 sitecustomize.js / client.js，并比业务脚本
+    // 更早注册 SIGTERM 监听器，其内部直接 process.exit(15)。EventEmitter 按
+    // 注册顺序调用，若不接管，这个立即退出会让下面的异步保存 / 推送永远没机会执行。
+    const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+    const inheritedListeners = signals.reduce((sum, signal) => sum + process.listenerCount(signal), 0);
+    signals.forEach(signal => process.removeAllListeners(signal));
+
     process.once('SIGINT', () => { handleExit('SIGINT'); });
     process.once('SIGTERM', () => { handleExit('SIGTERM'); });
     process.once('SIGHUP', () => { handleExit('SIGHUP'); });
+    if (inheritedListeners > 0) {
+        log(`🛡️ 已接管青龙退出信号（替换 ${inheritedListeners} 个预加载立即退出处理器）`);
+    }
     return handleExit;
 }
 

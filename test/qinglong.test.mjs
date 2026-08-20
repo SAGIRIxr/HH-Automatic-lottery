@@ -997,11 +997,14 @@ module.exports = {
         { 'sendNotify.js': mockSendNotify }
     );
 
-    // Windows 的 child.kill() 会强杀子进程，测试源码直接调用同一个信号处理器。
-    // 生产代码仍由 SIGINT / SIGTERM / SIGHUP 触发该处理器。
+    // 模拟青龙 NODE_OPTIONS 预加载的 sitecustomize.js：它会更早注册
+    // SIGTERM => process.exit(15)。guardExit 必须先接管这个监听器，再通过真实
+    // process.emit('SIGTERM') 走保存与推送流程。
     const installed = fs.readFileSync(file, 'utf8').replace(
         '    guardExit(lottery);',
-        "    const triggerTestStop = guardExit(lottery);\n    setTimeout(() => triggerTestStop('SIGTERM'), 250);"
+        "    process.on('SIGTERM', () => process.exit(15));\n"
+            + "    guardExit(lottery);\n"
+            + "    setTimeout(() => process.emit('SIGTERM'), 250);"
     );
     fs.writeFileSync(file, installed);
 
@@ -1009,6 +1012,7 @@ module.exports = {
     const notifyContent = fs.existsSync(notifyLog) ? fs.readFileSync(notifyLog, 'utf8') : '';
 
     check('手动停止后正常退出', code === 0, `exit ${code}`);
+    check('已替换青龙预加载的立即退出处理器', /已接管青龙退出信号/.test(out), out.slice(-800));
     check('说明了是被信号打断的', /收到 SIGTERM 停止信号（手动停止）/.test(out), out.slice(-800));
     check('已抽到的成绩存下来了',
         fs.existsSync(statsFile) && JSON.parse(fs.readFileSync(statsFile, 'utf8')).total.draws >= 1,
