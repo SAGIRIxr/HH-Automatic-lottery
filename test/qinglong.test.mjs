@@ -1236,6 +1236,111 @@ module.exports = {
 }
 
 /* ---------------------------------------------------------------- */
+console.log('\n[40] sendNotify 成功后不再直连 Telegram 重复推送');
+{
+    const site = await startSite({ prizes: ['魔力 100 '], balance: 100000 });
+    const notifyLog = path.join(TMP, 'notify-single-channel.log');
+    const mockSendNotify = `const fs = require('fs');
+module.exports = {
+    sendNotify: async (title, content) => {
+        fs.appendFileSync(${JSON.stringify(notifyLog)}, title + '\\n' + content + '\\n---END---\\n');
+    }
+};`;
+
+    const { dir, file } = installScript(
+        {
+            host: site.state.origin,
+            draws: 1,
+            notifyBigPrize: false,
+            tgBotToken: 'fake-token',
+            tgUserId: '123456',
+            tgApiHost: '127.0.0.1:1'
+        },
+        null,
+        { 'sendNotify.js': mockSendNotify }
+    );
+
+    const { code, out } = await runFile(file, dir);
+    const notifyContent = fs.existsSync(notifyLog) ? fs.readFileSync(notifyLog, 'utf8') : '';
+
+    check('正常退出', code === 0, `exit ${code}`);
+    check('最终总报只发送一次', (notifyContent.match(/---END---/g) || []).length === 1, notifyContent);
+    check('sendNotify 成功后没有调用 Telegram 直连', !/Telegram 直连/.test(out), out.slice(-800));
+
+    await site.close();
+}
+
+/* ---------------------------------------------------------------- */
+console.log('\n[41] 定时简报同时展示此次增量和历史总量');
+{
+    const site = await startSite({ prizes: ['魔力 5000 '], balance: 100000 });
+    const statsFile = path.join(TMP, 'stats-period-report.json');
+    const notifyLog = path.join(TMP, 'notify-period-report.log');
+
+    fs.writeFileSync(statsFile, JSON.stringify({
+        total: {
+            draws: 10,
+            cost: 20000,
+            gains: { beans: 15000 },
+            prizes: { beans: { count: 10, value: 15000, tiers: { '1,500 憨豆': 10 } } }
+        }
+    }));
+
+    const mockSendNotify = `const fs = require('fs');
+module.exports = {
+    sendNotify: async (title, content) => {
+        fs.appendFileSync(${JSON.stringify(notifyLog)}, title + '\\n' + content + '\\n---END---\\n');
+    }
+};`;
+
+    const { dir, file } = installScript(
+        {
+            host: site.state.origin,
+            draws: 1,
+            statsFile,
+            notifyBigPrize: false,
+            reportIntervalMinutes: 1
+        },
+        null,
+        { 'sendNotify.js': mockSendNotify }
+    );
+
+    // 把首次播报时间提前 61 秒，并让测试在第一抽后才首次检查，避免真等一分钟。
+    const installed = fs.readFileSync(file, 'utf8')
+        .replace('this.lastReportTime = Date.now();', 'this.lastReportTime = Date.now() - 61000;')
+        .replace(
+            '            await this.checkPeriodicReport();\n\n            const result = await this.drawOnce();',
+            '            const result = await this.drawOnce();'
+        );
+    fs.writeFileSync(file, installed);
+
+    const { code } = await runFile(file, dir);
+    const notifyContent = fs.existsSync(notifyLog) ? fs.readFileSync(notifyLog, 'utf8') : '';
+    const periodReport = notifyContent.split('---END---')[0] || '';
+
+    check('正常退出', code === 0, `exit ${code}`);
+    check('明确划分此次增量和历史总量',
+        /此次播报增量/.test(periodReport) && /历史累计总量/.test(periodReport), periodReport);
+    check('增量抽数、收支和盈亏正确',
+        /抽奖：\+1 抽/.test(periodReport)
+        && /消耗：-2,000 憨豆/.test(periodReport)
+        && /获得：\+5,000 憨豆/.test(periodReport)
+        && /净盈亏：\+3,000（\+150\.0%）/.test(periodReport), periodReport);
+    check('历史总抽数、总收支和总盈亏正确',
+        /总抽奖：11 抽/.test(periodReport)
+        && /总消耗：22,000 憨豆/.test(periodReport)
+        && /总获得：20,000 憨豆/.test(periodReport)
+        && /总盈亏：-2,000（-9\.1%）/.test(periodReport), periodReport);
+    check('增量奖品附带该奖品的历史累计',
+        /憨豆：\+1 次（5,000）/.test(periodReport)
+        && /历史累计 11 次（20,000）/.test(periodReport), periodReport);
+    check('通知标题不在正文里再重复一遍',
+        (periodReport.match(/运行简报/g) || []).length === 1, periodReport);
+
+    await site.close();
+}
+
+/* ---------------------------------------------------------------- */
 fs.rmSync(TMP, { recursive: true, force: true });
 
 console.log(`\n=========== ${passed} passed, ${failed} failed ===========\n`);

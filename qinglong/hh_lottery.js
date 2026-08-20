@@ -10,7 +10,7 @@
  *   - 🎉 大奖即时推送：命中 邀请、VIP（或折算憨豆）、78w+ 憨豆等大奖即时推送
  *   - 📊 周期统计简报：每隔 1 小时（或自定义频率）推送运行简报卡片
  *   - 💾 统计实时落盘与导入导出：每抽一注立刻实时安全落盘，支持导入历史备份
- *   - 📱 双重推送保障：支持青龙 sendNotify 及原生 Telegram Bot 直连推送
+ *   - 📱 推送故障转移：优先使用青龙 sendNotify，失败时再用 Telegram Bot 直连兜底
  *   - 📪 站内信清理：抽奖同时自动清理系统抽奖通知信，不误删重要邮件
  *
  * 命令行指令：
@@ -656,48 +656,63 @@ function renderBigPrizeNotification({ prize, prizeText, drawIndex, totalDraws, b
     ].join('\n');
 }
 
-function renderPeriodReport({ period, current, total, balance, periodMinutes, totalTimeStr }) {
+function renderPeriodReport({ period, total, balance, periodMinutes, totalTimeStr }) {
     const pBeans = period.gains.beans || 0;
     const pProfit = pBeans - period.cost;
     const pRate = period.cost > 0 ? ((pProfit / period.cost) * 100).toFixed(1) : '0.0';
 
-    const cBeans = current.gains.beans || 0;
-    const cProfit = cBeans - current.cost;
-    const cRate = current.cost > 0 ? ((cProfit / current.cost) * 100).toFixed(1) : '0.0';
+    const tBeans = total.gains.beans || 0;
+    const tProfit = tBeans - total.cost;
+    const tRate = total.cost > 0 ? ((tProfit / total.cost) * 100).toFixed(1) : '0.0';
 
     const pSwapped = swappedBeansTotal(period);
+    const tSwapped = swappedBeansTotal(total);
 
     const prizeRows = Object.entries(period.prizes)
         .filter(([, bucket]) => bucket.count > 0)
         .sort((a, b) => b[1].count - a[1].count)
         .map(([type, bucket]) => {
             const meta = PRIZE_META[type] || PRIZE_META.unknown;
-            const sums = [];
-            if (bucket.value > 0) sums.push(`${fmt(bucket.value)}${meta.unit ? ' ' + meta.unit : ''}`);
-            if (bucket.swappedBeans > 0) sums.push(`折算 ${fmt(bucket.swappedBeans)} 憨豆`);
-            return `  ${meta.icon} ${meta.name}：${fmt(bucket.count)} 次${sums.length ? `（${sums.join(' · ')}）` : ''}`;
+            const totalBucket = total.prizes[type] || { count: 0, value: 0, swappedBeans: 0 };
+            const describe = item => {
+                const sums = [];
+                if (item.value > 0) sums.push(`${fmt(item.value)}${meta.unit ? ' ' + meta.unit : ''}`);
+                if (item.swappedBeans > 0) sums.push(`折算 ${fmt(item.swappedBeans)} 憨豆`);
+                return sums.length ? `（${sums.join(' · ')}）` : '';
+            };
+
+            return [
+                `  ${meta.icon} ${meta.name}：+${fmt(bucket.count)} 次${describe(bucket)}`,
+                `     ↳ 历史累计 ${fmt(totalBucket.count)} 次${describe(totalBucket)}`
+            ].join('\n');
         });
 
     const prizeSection = prizeRows.length > 0
-        ? `🎁 本时段奖品明细：\n${prizeRows.join('\n')}`
-        : `🎁 本时段：尚未抽中奖品 / 处于休眠待机`;
+        ? `🎁 增量奖品明细：\n${prizeRows.join('\n')}`
+        : `🎁 增量奖品明细：本时段无抽奖记录（休眠 / 待机中）`;
 
     return [
-        `📊【HHCLUB 幸运大转盘 · 运行简报】`,
+        `╭─ ⏱️ 定时战报`,
+        `│ 统计区间：近 ${periodMinutes} 分钟`,
+        `│ 持续运行：${totalTimeStr}`,
+        `╰─ 播报时间：${stamp()}`,
         `━━━━━━━━━━━━━━━━━━━`,
-        `⏱️ 统计时段：近 ${periodMinutes} 分钟 (已运行 ${totalTimeStr})`,
-        `🎰 时段抽数：${fmt(period.draws)} 抽`,
-        `💰 憨豆收支：消耗 ${fmt(period.cost)} · 获得 ${fmt(pBeans)}${pSwapped > 0 ? `（含折算 ${fmt(pSwapped)}）` : ''}`,
-        `📈 时段盈亏：${pProfit >= 0 ? '+' : ''}${fmt(pProfit)}（${pProfit >= 0 ? '+' : ''}${pRate}%）`,
-        `💵 当前余额：${fmt(balance)} 憨豆`,
+        `🆕 此次播报增量`,
+        `  🎰 抽奖：+${fmt(period.draws)} 抽`,
+        `  💸 消耗：-${fmt(period.cost)} 憨豆`,
+        `  🎁 获得：+${fmt(pBeans)} 憨豆${pSwapped > 0 ? `（含折算 ${fmt(pSwapped)}）` : ''}`,
+        `  ${pProfit >= 0 ? '📈' : '📉'} 净盈亏：${pProfit >= 0 ? '+' : ''}${fmt(pProfit)}（${pProfit >= 0 ? '+' : ''}${pRate}%）`,
         `━━━━━━━━━━━━━━━━━━━`,
         prizeSection,
         `━━━━━━━━━━━━━━━━━━━`,
-        `📊 挂机累计数据：`,
-        `  • 本次累计抽数：${fmt(current.draws)} 抽${total.draws > current.draws ? `（历史总计 ${fmt(total.draws)} 抽）` : ''}`,
-        `  • 本次累计盈亏：${cProfit >= 0 ? '+' : ''}${fmt(cProfit)}（${cProfit >= 0 ? '+' : ''}${cRate}%）`,
+        `🏆 历史累计总量（含此次增量）`,
+        `  🎰 总抽奖：${fmt(total.draws)} 抽`,
+        `  💸 总消耗：${fmt(total.cost)} 憨豆`,
+        `  🎁 总获得：${fmt(tBeans)} 憨豆${tSwapped > 0 ? `（含折算 ${fmt(tSwapped)}）` : ''}`,
+        `  ${tProfit >= 0 ? '📈' : '📉'} 总盈亏：${tProfit >= 0 ? '+' : ''}${fmt(tProfit)}（${tProfit >= 0 ? '+' : ''}${tRate}%）`,
+        `  💵 当前余额：${fmt(balance)} 憨豆`,
         `━━━━━━━━━━━━━━━━━━━`,
-        `🤖 状态：${CONFIG.continuous ? '后台持续监控与抽奖中' : '运行中'} | 播报时间：${stamp()}`
+        `🤖 ${CONFIG.continuous ? '后台持续监控与抽奖中' : '抽奖任务运行中'} · 下次播报约 ${CONFIG.reportIntervalMinutes} 分钟后`
     ].join('\n');
 }
 
@@ -966,7 +981,6 @@ class Lottery {
 
         const content = renderPeriodReport({
             period: this.period,
-            current: this.current,
             total: this.total,
             balance: this.balance,
             periodMinutes: durationMinutes,
@@ -1406,15 +1420,16 @@ async function notify(title, content) {
         }
     }
 
-    // 2. 原生 Telegram 直连推送（强保障，独立于 sendNotify.js）
-    if (CONFIG.tgBotToken || process.env.TG_BOT_TOKEN) {
+    // 2. sendNotify 未成功时才走 Telegram 直连兜底。
+    //    青龙 sendNotify 通常已经集成 Telegram，两边同时发会造成重复通知。
+    if (sentCount === 0 && (CONFIG.tgBotToken || process.env.TG_BOT_TOKEN)) {
         const tgOk = await sendTelegramDirect(title, content);
         if (tgOk) sentCount++;
-    } else {
+    } else if (sentCount === 0) {
         log('ℹ️ 未检测到 TG_BOT_TOKEN 环境变量。如需 TG 推送，请在青龙「环境变量」添加 TG_BOT_TOKEN 与 TG_USER_ID');
     }
 
-    if (sentCount === 0 && !sender) {
+    if (sentCount === 0) {
         log('ℹ️ 未能成功触发任何通知渠道');
     }
 }
