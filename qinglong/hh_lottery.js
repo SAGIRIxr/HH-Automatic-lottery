@@ -1,22 +1,21 @@
 /**
- * HHCLUB 幸运大转盘 · 青龙版
+ * HHCLUB 幸运大转盘 · 自动化抽奖脚本（青龙 & 命令行挂机版）
  *
  * new Env('HHCLUB抽奖');
  * cron: 5 9 * * *
  *
- * 用法：把下面「配置区」里的 Cookie 填上就能跑，其余按需改。
- * 也可以在同目录放一个 hh_lottery.config.json 把配置外置 ——
- * 那样更新脚本（直接覆盖）不会把配置冲掉。首次运行会替你生成模板。
- * 支持青龙环境变量（如 HH_COOKIE, HH_DRAWS, HH_CONTINUOUS 等）。
- * 详细说明见同目录 README.md。
+ * 特性：
+ *   - 🔄 后台持续挂机：憨豆不足自动休眠等待做种产出，回血后继续自动抽
+ *   - 🎉 大奖即时推送：命中 邀请、VIP（或折算憨豆）、78w+ 憨豆等大奖即时推送
+ *   - 📊 周期统计简报：每隔 1 小时（或自定义频率）推送运行简报卡片
+ *   - 💾 统计导入导出：支持导出和合并导入历史备份 JSON 文件
+ *   - 📪 站内信清理：抽奖同时自动清理系统抽奖通知信，不误删重要邮件
  *
- * 统计会存成一份 JSON，格式和油猴版的「💾 备份 JSON」完全一致 ——
- * 从 NAS 上把这个文件拿下来，在浏览器面板里点「📥 导入备份」就能合进去。
+ * 命令行指令：
+ *   - 正常运行 / 挂机： node hh_lottery.js
+ *   - 导入历史备份：     node hh_lottery.js --import <backup.json>
  *
- * 不只能在青龙里跑 —— 任何装了 Node 18+ 的机器（Debian / NAS / 群晖…）
- * 直接 `node hh_lottery.js` 就行，配 crontab 或 systemd timer 定时。
- *
- * 依赖：Node 18+（用的是内置 fetch，不需要 npm install 任何东西）
+ * 依赖：Node 18+（内置 fetch，无需 npm install 任何依赖）
  * 仓库：https://github.com/Agonie0v0/HH-Automatic-lottery
  * 协议：MIT
  */
@@ -76,19 +75,20 @@ const CONFIG = {
           只删这一种，「种子被删除」之类的一封不碰 */
     cleanMail: false,
 
-    /* ⑫ 统计存到哪个文件。跨次运行累计，格式和油猴版备份一致，
-          拿下来就能在浏览器面板里「📥 导入备份」。
-          留空字符串 '' 就是不记 */
+    /* ⑫ 统计存到哪个文件。跨次运行累计，留空 '' 就是不记 */
     statsFile: 'hh_lottery_stats.json',
 
-    /* ⑬ 日志时间按哪个时区显示。
+    /* ⑬ 要导入的历史备份 JSON 文件路径（可选，也可通过 CLI: node hh_lottery.js --import <file> 导入） */
+    importFile: '',
+
+    /* ⑭ 日志时间按哪个时区显示。
           青龙容器默认常是 UTC，不设这个的话日志时间对不上 */
     timezone: 'Asia/Shanghai',
 
-    /* ⑭ 站点域名，一般不用改 */
+    /* ⑮ 站点域名，一般不用改 */
     host: 'hhanclub.net',
 
-    /* ⑮ User-Agent，一般不用改 */
+    /* ⑯ User-Agent，一般不用改 */
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
         + '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
 };
@@ -118,7 +118,7 @@ const RUNTIME = {
     mailMaxPages: 600,
     // 反复清第一页的轮数上限
     mailSweepRounds: 20,
-    // 抽奖途中每多少抽顺手清一次（和油猴版的节奏一致）
+    // 抽奖途中每多少抽顺手清一次
     mailCleanEveryDraws: 25,
     lotteryMailKeyword: '幸运大转盘'
 };
@@ -138,6 +138,7 @@ function loadEnvConfig() {
     if (env.HH_REPORT_INTERVAL !== undefined) CONFIG.reportIntervalMinutes = env.HH_REPORT_INTERVAL;
     if (env.HH_CLEAN_MAIL !== undefined) CONFIG.cleanMail = env.HH_CLEAN_MAIL === 'true' || env.HH_CLEAN_MAIL === '1';
     if (env.HH_STATS_FILE !== undefined) CONFIG.statsFile = env.HH_STATS_FILE;
+    if (env.HH_IMPORT_FILE !== undefined) CONFIG.importFile = env.HH_IMPORT_FILE;
     if (env.HH_TIMEZONE !== undefined) CONFIG.timezone = env.HH_TIMEZONE;
     if (env.HH_HOST !== undefined) CONFIG.host = env.HH_HOST;
 }
@@ -161,6 +162,7 @@ function normalizeConfig() {
     CONFIG.cleanMail = CONFIG.cleanMail === true || String(CONFIG.cleanMail).toLowerCase() === 'true' || String(CONFIG.cleanMail) === '1';
     CONFIG.host = String(CONFIG.host || 'hhanclub.net').trim().replace(/\/+$/, '');
     CONFIG.statsFile = String(CONFIG.statsFile || '').trim();
+    CONFIG.importFile = String(CONFIG.importFile || '').trim();
     CONFIG.timezone = String(CONFIG.timezone || '').trim();
 }
 
@@ -254,7 +256,6 @@ function raw(block) {
 
 const messages = [];
 function report(line) {
-    // 通知里存不带时间戳的版本，推送出去更紧凑
     messages.push(line);
     log(line);
 }
@@ -288,9 +289,7 @@ function decodeUnicode(text) {
     );
 }
 
-/* 没有 DOM，只能在 HTML 里按 class 取值：
-   先定位到那个 class 属性，跳到它所在标签的 '>' 之后，
-   再把后面一小段的标签剥掉。比整段正则匹配耐改版。 */
+/* 没有 DOM，只能在 HTML 里按 class 取值 */
 function textAfterClass(html, className, span = 400) {
     const matched = new RegExp(`class="[^"]*\\b${className}\\b[^"]*"`, 'i').exec(html);
     if (!matched) return null;
@@ -306,7 +305,7 @@ function numberAfterClass(html, className) {
 }
 
 /* =========================================================
-   奖品解析（和油猴版同一套规则）
+   奖品解析
 ========================================================= */
 
 const PRIZE_META = {
@@ -327,8 +326,6 @@ function parsePrizeText(text) {
     if (!compact) return fallback;
 
     const rules = [
-        // 站点奖池里 type 1001 的 typeText 写作「魔力」，但图标是 bean_icon、
-        // 消耗侧也叫憨豆 —— 同一种货币，归到一类
         { type: 'beans', test: t => t.includes('魔力') || t.includes('憨豆') },
         { type: 'invite', test: t => t.includes('邀请') },
         { type: 'rainbow', test: t => t.includes('彩虹') },
@@ -377,15 +374,9 @@ function isBigPrize(prize) {
     return false;
 }
 
-/* 收件箱里只有主题带这几个字的会被删。同一个收件箱里还混着
-   「种子被删除」「憨豆 改变」这类真要看的通知，宁可漏删也不能误删。 */
+/* 收件箱里只有主题带这几个字的会被删 */
 const isLotteryMail = item => item.subject.includes(RUNTIME.lotteryMailKeyword);
 
-/* 折算金额是站点明文印在抽奖页上的：
-     「当中奖 [VIP] 时，如果用户已经是 VIP 或以上等级，奖励憨豆： 1000000」
-   必须读它，不能拿余额差当金额 —— 憨豆还会因为做种持续增长，
-   两次读数之间涨的那几十点会被当成中奖收入记进去
-   （线上真出现过「1,000,060 憨豆」这种不存在的档位）。 */
 function parseVipSwapBeansFrom(html) {
     const text = String(html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
     const match = text.match(/当中奖\s*\[?\s*VIP\s*\]?[^当]{0,80}?奖励憨豆[：:]\s*([\d,]+)/i);
@@ -395,10 +386,6 @@ function parseVipSwapBeansFrom(html) {
     return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-/* 「VIP 或以上等级」说的是 NexusPHP 的 class。站点可以把等级名字改得
-   面目全非（本站叫「俺不中类」），但等级图标用的还是标准文件名，
-   所以按图标判。只要判出 class ≥ VIP，折算与否就是确定的事实，
-   不用再去猜余额 —— 别人赠送魔力、做种收益统统影响不到。 */
 const CLASS_RANK = {
     user: 1, power: 2, elite: 3, crazy: 4, insane: 5, veteran: 6,
     extreme: 7, ultimate: 8, nexusmaster: 9, vip: 10, retiree: 11,
@@ -407,7 +394,7 @@ const CLASS_RANK = {
 };
 
 /* =========================================================
-   统计
+   统计与数据导入导出
 ========================================================= */
 
 function emptyStats() {
@@ -428,8 +415,6 @@ function ensureBucket(stats, type) {
     return stats.prizes[type];
 }
 
-/* 读进来的文件可能是手改过的、或者早期版本存的，收一遍。
-   早期版本把「魔力」当独立类别存过，这里合回 beans。 */
 function normalizeStats(data) {
     const stats = emptyStats();
     if (!data || typeof data !== 'object') return stats;
@@ -461,6 +446,70 @@ function normalizeStats(data) {
     return stats;
 }
 
+function mergeStats(target, source) {
+    if (!source || typeof source !== 'object') return target;
+    const norm = normalizeStats(source?.total || source?.current || source);
+
+    target.draws += norm.draws;
+    target.cost += norm.cost;
+
+    Object.keys(target.gains).forEach(key => {
+        target.gains[key] = (target.gains[key] || 0) + (norm.gains[key] || 0);
+    });
+
+    Object.entries(norm.prizes || {}).forEach(([type, bucket]) => {
+        const targetBucket = ensureBucket(target, type);
+        targetBucket.count += Number(bucket?.count) || 0;
+        targetBucket.value += Number(bucket?.value) || 0;
+        if (bucket?.swappedBeans) {
+            targetBucket.swappedBeans = (targetBucket.swappedBeans || 0) + Number(bucket.swappedBeans);
+        }
+        Object.entries(bucket?.tiers || {}).forEach(([label, count]) => {
+            targetBucket.tiers[label] = (targetBucket.tiers[label] || 0) + (Number(count) || 0);
+        });
+    });
+
+    Object.entries(norm.raw || {}).forEach(([key, count]) => {
+        target.raw[key] = (target.raw[key] || 0) + (Number(count) || 0);
+    });
+
+    if (norm.firstAt && (!target.firstAt || norm.firstAt < target.firstAt)) {
+        target.firstAt = norm.firstAt;
+    }
+    if (norm.lastAt && (!target.lastAt || norm.lastAt > target.lastAt)) {
+        target.lastAt = norm.lastAt;
+    }
+
+    return target;
+}
+
+function importStatsFile(importFilePath) {
+    const absPath = path.isAbsolute(importFilePath) ? importFilePath : path.join(process.cwd(), importFilePath);
+    if (!fs.existsSync(absPath)) {
+        log(`❌ 导入文件不存在：${absPath}`);
+        return false;
+    }
+
+    let payload;
+    try {
+        payload = JSON.parse(fs.readFileSync(absPath, 'utf8'));
+    } catch (err) {
+        log(`❌ 导入文件不是合法的 JSON：${err?.message || err}`);
+        return false;
+    }
+
+    const currentTotal = loadTotal();
+    const beforeDraws = currentTotal.draws;
+    mergeStats(currentTotal, payload);
+    const addedDraws = currentTotal.draws - beforeDraws;
+
+    const savedFile = saveStats(emptyStats(), currentTotal);
+    log(`📥 成功导入历史记录文件：${absPath}`);
+    log(`   合并了 ${fmt(addedDraws)} 抽历史数据，当前历史累计达到 ${fmt(currentTotal.draws)} 抽`);
+    if (savedFile) log(`💾 已合并保存到统计文件：${savedFile}`);
+    return true;
+}
+
 function applyPrize(stats, prizeText, cost, prize) {
     stats.draws += 1;
     stats.cost += cost;
@@ -474,7 +523,6 @@ function applyPrize(stats, prizeText, cost, prize) {
     bucket.value += prize.value;
     bucket.tiers[prize.label] = (bucket.tiers[prize.label] || 0) + 1;
 
-    // 接口返回的文案常带尾随空格，不 trim 的话同一个奖会留下两条 key
     const rawKey = String(prizeText).trim();
     stats.raw[rawKey] = (stats.raw[rawKey] || 0) + 1;
 
@@ -523,7 +571,7 @@ function loadTotal() {
     }
 }
 
-/* 存的就是油猴版备份文件那个格式，拿去导入即可 */
+/* 导出为通用备份 JSON 格式 */
 function saveStats(current, total) {
     const file = statsPath();
     if (!file) return '';
@@ -540,8 +588,6 @@ function saveStats(current, total) {
     try {
         fs.mkdirSync(path.dirname(file), { recursive: true });
 
-        // 先写临时文件再改名。直接往目标文件写的话，写到一半断电 / 被 SIGKILL
-        // 就会留下半截 JSON，下次读不出来 —— 攒了几千抽的统计不能这么丢
         const temp = `${file}.tmp`;
         fs.writeFileSync(temp, JSON.stringify(payload, null, 2));
         fs.renameSync(temp, file);
@@ -695,7 +741,7 @@ function renderFinalReport({ current, total, balance, runningTimeStr, status = '
 }
 
 /* =========================================================
-   抽奖
+   抽奖核心类
 ========================================================= */
 
 class Lottery {
@@ -715,9 +761,7 @@ class Lottery {
         this.periodStartTime = Date.now();
         this.lastReportTime = Date.now();
 
-        // 站点公布的折算金额，开跑时从抽奖页读
         this.vipSwapBeans = 0;
-        // true = 是 VIP 或以上，false = 不是，null = 没查出来
         this.vipOrAbove = null;
         this.vipClassChecked = false;
 
@@ -746,7 +790,6 @@ class Lottery {
         return response.text();
     }
 
-    /* 一次请求同时拿余额、单抽消耗。站点抽完不刷新页面，这两个数只能主动来取。 */
     async snapshot() {
         const html = await this.get('/lucky.php');
 
@@ -754,7 +797,6 @@ class Lottery {
             throw new Error('Cookie 已失效，站点把我踢回登录页了');
         }
 
-        // 折算金额和单抽消耗一样是站点随时能改的，顺手刷新
         const swapBeans = parseVipSwapBeansFrom(html);
         if (swapBeans > 0) this.vipSwapBeans = swapBeans;
 
@@ -771,7 +813,6 @@ class Lottery {
             method: 'POST',
             headers: this.headers({
                 'x-requested-with': 'XMLHttpRequest',
-                // 站点自己用的是 jQuery.post，对齐 Content-Type
                 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'
             }),
             body: ''
@@ -837,10 +878,9 @@ class Lottery {
         this.balance = actual;
 
         const beans = this.readVipSwapBeans();
-
         const eligible = await this.checkVipOrAbove();
 
-        if (eligible === false) return 0;                 // 不是 VIP，真拿到了天数
+        if (eligible === false) return 0;
         if (eligible === null) {
             if (Math.abs(drift - beans) > RUNTIME.vipSwapTolerance) {
                 if (drift > RUNTIME.vipSwapTolerance) {
@@ -884,7 +924,6 @@ class Lottery {
         }
         if (CONFIG.draws > 0) return this.current.draws < CONFIG.draws;
 
-        // 一抽到底：留够保留线
         if (this.balance - this.cost < CONFIG.reserve) {
             report(`🏁 一抽到底完成，余额 ${fmt(this.balance)}（保留线 ${fmt(CONFIG.reserve)}）`);
             return false;
@@ -972,7 +1011,6 @@ class Lottery {
                 continue;
             }
 
-            // 间隔放在开头：最后一抽完就收工，不用白等
             if (!firstRound) await sleep(this.nextDelay());
             firstRound = false;
 
@@ -1008,7 +1046,6 @@ class Lottery {
                     vipSwapped = await this.reconcileVip(prize);
                 }
 
-                // 命中大奖即时推送通知
                 if (CONFIG.notifyBigPrize && isBigPrize(prize)) {
                     const bigPrizeNotice = renderBigPrizeNotification({
                         prize,
@@ -1023,7 +1060,6 @@ class Lottery {
                     await notify('🎉【HHCLUB 幸运大转盘】命中大奖通知！', bigPrizeNotice);
                 }
 
-                // 和油猴版一个节奏：每 25 抽顺手清一次
                 if (CONFIG.cleanMail && this.current.draws % RUNTIME.mailCleanEveryDraws === 0) {
                     await this.sweepDuringRun();
                 }
@@ -1049,7 +1085,6 @@ class Lottery {
                 continue;
             }
 
-            // 憨豆不足 / 次数用完这类是明确的终止信号
             if (msg.includes('次数') || msg.includes('用完') || msg.includes('不足')) {
                 if (this.isContinuous && msg.includes('不足')) {
                     this.balance = 0;
@@ -1301,9 +1336,23 @@ async function main() {
         process.exit(1);
     }
 
+    // 处理 CLI 导入指令: node hh_lottery.js --import <file>
+    const args = process.argv.slice(2);
+    const importIdx = args.findIndex(arg => arg === '--import' || arg === '-i' || arg === 'import');
+    if (importIdx >= 0 && args[importIdx + 1]) {
+        const targetFile = args[importIdx + 1];
+        const ok = importStatsFile(targetFile);
+        process.exit(ok ? 0 : 1);
+    }
+
     loadEnvConfig();
     const configFile = loadExternalConfig();
     normalizeConfig();
+
+    // 如果配置了 importFile，则启动前合并导入
+    if (CONFIG.importFile) {
+        importStatsFile(CONFIG.importFile);
+    }
 
     const cookie = readCookie();
     if (!cookie) {
@@ -1349,7 +1398,7 @@ async function main() {
 
     if (lottery.current.draws > 0) {
         const file = saveStats(lottery.current, lottery.total);
-        if (file) report(`💾 统计已存到 ${file}（可直接在油猴面板里「导入备份」）`);
+        if (file) report(`💾 统计已存到 ${file}`);
     }
 
     if (CONFIG.cleanMail) {

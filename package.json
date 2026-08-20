@@ -1,17 +1,13 @@
 {
   "name": "hhclub-auto-lottery",
-  "version": "1.14.0",
-  "description": "HHCLUB 自动抽奖 · 情绪价值拉满版 —— 分奖项统计 / 一抽到底 / 实时余额 / 站内信清理，油猴脚本 + 青龙版",
+  "version": "2.0.0",
+  "description": "HHCLUB 自动抽奖 · 青龙面板与后台挂机版 —— 持续挂机 / 智能做种休眠 / 大奖即时推送 / 小时统计简报 / 历史记录导入导出 / 站内信清理",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node test/lottery.test.mjs",
+    "test": "node test/qinglong.test.mjs",
     "test:ql": "node test/qinglong.test.mjs",
-    "test:all": "node test/lottery.test.mjs && node test/qinglong.test.mjs",
-    "check": "node --check hhclub-auto-lottery.user.js && node --check qinglong/hh_lottery.js"
+    "check": "node --check qinglong/hh_lottery.js"
   },
-  "license": "MIT",
-  "devDependencies": {
-    "jsdom": "^27.0.0"
-  }
+  "license": "MIT"
 }

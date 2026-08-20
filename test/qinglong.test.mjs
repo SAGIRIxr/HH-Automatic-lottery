@@ -1135,8 +1135,50 @@ module.exports = {
 }
 
 /* ---------------------------------------------------------------- */
+console.log('\n[38] 历史记录导入（CLI 与合并）');
+{
+    const backupFile = path.join(TMP, 'test-import-source.json');
+    const statsFile = path.join(TMP, 'test-import-target.json');
+
+    const fakeBackup = {
+        kind: 'hhclub-lottery-backup',
+        version: 4,
+        exportedAt: new Date().toISOString(),
+        source: 'backup',
+        total: {
+            draws: 50,
+            cost: 100000,
+            gains: { beans: 85000, magic: 0, invite: 1, rainbow: 7, vip: 0, makeup: 3, upload: 10, rename: 0 },
+            prizes: {
+                invite: { count: 1, value: 1, tiers: { '1 邀请': 1 } },
+                beans: { count: 40, value: 85000, tiers: { '1,000 憨豆': 20, '5,000 憨豆': 13 } }
+            },
+            raw: { '邀请 1 个': 1, '魔力 1000 ': 20, '魔力 5000 ': 13 }
+        }
+    };
+    fs.writeFileSync(backupFile, JSON.stringify(fakeBackup, null, 2));
+
+    const { dir, file } = installScript({ statsFile });
+
+    const child = spawn(process.execPath, [file, '--import', backupFile], { cwd: dir });
+    let out = '';
+    child.stdout.on('data', d => { out += d; });
+    child.stderr.on('data', d => { out += d; });
+    const code = await new Promise(resolve => child.on('close', resolve));
+
+    check('CLI 导入指令正常退出', code === 0, `exit ${code}`);
+    check('日志报了成功导入与合并抽数', /成功导入历史记录文件/.test(out) && /合并了 50 抽/.test(out), out);
+
+    const saved = JSON.parse(fs.readFileSync(statsFile, 'utf8')).total;
+    check('导入后抽数对得上 (50 抽)', saved.draws === 50, `实际 ${saved.draws}`);
+    check('导入后消耗对得上 (100,000)', saved.cost === 100000, `实际 ${saved.cost}`);
+    check('导入后邀请数对得上 (1 次)', saved.prizes.invite.count === 1, `实际 ${saved.prizes.invite.count}`);
+}
+
+/* ---------------------------------------------------------------- */
 fs.rmSync(TMP, { recursive: true, force: true });
 
 console.log(`\n=========== ${passed} passed, ${failed} failed ===========\n`);
 process.exit(failed ? 1 : 0);
+
 
