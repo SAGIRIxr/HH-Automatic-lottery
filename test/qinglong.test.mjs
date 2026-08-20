@@ -1068,7 +1068,75 @@ console.log('\n[35] 没有折算时不多这一句');
 }
 
 /* ---------------------------------------------------------------- */
+console.log('\n[36] 命中大奖（邀请 / VIP / 78w 憨豆）立即触发通知');
+{
+    const site = await startSite({
+        prizes: ['邀请 1 个', '魔力 780000 ', 'VIP 7 Day(s)'],
+        balance: 1000000
+    });
+
+    const notifyLog = path.join(TMP, 'notify-big-prizes.log');
+    const mockSendNotify = `const fs = require('fs');
+module.exports = {
+    sendNotify: async (title, content) => {
+        fs.appendFileSync(${JSON.stringify(notifyLog)}, title + '\\n' + content + '\\n---END---\\n');
+    }
+};`;
+
+    const { dir, file } = installScript(
+        { host: site.state.origin, draws: 3, notifyBigPrize: true, bigPrizeMinBeans: 780000 },
+        null,
+        { 'sendNotify.js': mockSendNotify }
+    );
+
+    const { code, out } = await runFile(file, dir);
+
+    check('正常退出', code === 0, `exit ${code}`);
+    check('日志报了 3 次大奖命中', (out.match(/命中大奖/g) || []).length === 3, out.slice(-800));
+
+    const notifyContent = fs.existsSync(notifyLog) ? fs.readFileSync(notifyLog, 'utf8') : '';
+    check('邀请大奖推了通知', /命中大奖：📧 邀请码 1 个/.test(notifyContent));
+    check('78w 憨豆大奖推了通知', /命中大奖：💰 780,000 憨豆/.test(notifyContent));
+    check('VIP 大奖推了通知', /命中大奖：⭐ VIP 7 天/.test(notifyContent));
+    check('通知带了卡片分隔线和运行战报', /━━━━━━━━━━━━━━━━━━━/.test(notifyContent));
+
+    await site.close();
+}
+
+/* ---------------------------------------------------------------- */
+console.log('\n[37] 运行总报与排版美化');
+{
+    const site = await startSite({
+        prizes: ['魔力 5000 '],
+        balance: 100000
+    });
+
+    const notifyLog = path.join(TMP, 'notify-summary.log');
+    const mockSendNotify = `const fs = require('fs');
+module.exports = {
+    sendNotify: async (title, content) => {
+        fs.appendFileSync(${JSON.stringify(notifyLog)}, title + '\\n' + content + '\\n---END---\\n');
+    }
+};`;
+
+    const { dir, file } = installScript(
+        { host: site.state.origin, draws: 2 },
+        null,
+        { 'sendNotify.js': mockSendNotify }
+    );
+
+    await runFile(file, dir);
+    const notifyContent = fs.existsSync(notifyLog) ? fs.readFileSync(notifyLog, 'utf8') : '';
+
+    check('总报标题包含运行总报', /【HHCLUB 幸运大转盘】运行总报/.test(notifyContent));
+    check('排版包含美化卡片内容', /运行时长：/.test(notifyContent) && /最终余额：/.test(notifyContent));
+
+    await site.close();
+}
+
+/* ---------------------------------------------------------------- */
 fs.rmSync(TMP, { recursive: true, force: true });
 
 console.log(`\n=========== ${passed} passed, ${failed} failed ===========\n`);
 process.exit(failed ? 1 : 0);
+
