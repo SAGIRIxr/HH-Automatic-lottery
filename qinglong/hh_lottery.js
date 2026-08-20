@@ -9,7 +9,7 @@
  *   - 🔄 可选后台持续挂机：憨豆不足自动休眠等待做种产出，回血后继续自动抽
  *   - 🎉 大奖即时推送：命中 邀请、VIP（或折算憨豆）、78w+ 憨豆等大奖即时推送
  *   - 📊 周期统计简报：每隔 1 小时（或自定义频率）推送运行简报卡片
- *   - 💾 统计导入导出：支持导出和合并导入历史备份 JSON 文件
+ *   - 💾 统计实时落盘与导入导出：每抽一注立刻实时安全落盘，支持导入历史备份
  *   - 📪 站内信清理：抽奖同时自动清理系统抽奖通知信，不误删重要邮件
  *
  * 命令行指令：
@@ -38,7 +38,7 @@ const CONFIG = {
 
     /* ② 每次运行抽多少次。
           达到该次数后自动停止并发送统计通知。
-          填 0 = 一抽到底，一直抽到余额跌破下面的保留线为止 */
+          填 0 = 一抽到底 / 持续挂机，一直抽到余额跌破下面的保留线为止 */
     draws: 10,
 
     /* ③ 一抽到底 / 挂机模式时给自己留多少憨豆不动 */
@@ -573,7 +573,7 @@ function loadTotal() {
     }
 }
 
-/* 导出为通用备份 JSON 格式 */
+/* 导出为通用备份 JSON 格式（原子写入） */
 function saveStats(current, total) {
     const file = statsPath();
     if (!file) return '';
@@ -914,23 +914,24 @@ class Lottery {
     }
 
     shouldContinue() {
-        if (this.isContinuous) {
-            if (this.deadline > 0 && Date.now() > this.deadline) {
-                this.stopReason = `到达单次运行时间上限（${CONFIG.maxMinutes} 分钟）`;
-                report(`⏰ ${this.stopReason}，收工`);
-                return false;
-            }
-            return true;
-        }
-
         if (this.deadline > 0 && Date.now() > this.deadline) {
             this.stopReason = `到达单次运行时间上限（${CONFIG.maxMinutes} 分钟）`;
             report(`⏰ ${this.stopReason}，收工`);
             return false;
         }
 
+        // 只要设定了 draws > 0，达到设定次数就必须停止（无论是否设置了 continuous）
         if (CONFIG.draws > 0 && this.current.draws >= CONFIG.draws) {
             this.stopReason = `已达到设定抽奖次数（${fmt(CONFIG.draws)} 抽）`;
+            return false;
+        }
+
+        if (this.isContinuous) {
+            return true;
+        }
+
+        if (this.balance < this.cost) {
+            this.stopReason = `憨豆不足（当前余额 ${fmt(this.balance)} · 单抽需 ${fmt(this.cost)}）`;
             return false;
         }
 
@@ -985,7 +986,7 @@ class Lottery {
             return;
         }
 
-        if (CONFIG.draws === 0 && this.balance - this.cost < CONFIG.reserve) {
+        if (CONFIG.draws === 0 && !this.isContinuous && this.balance - this.cost < CONFIG.reserve) {
             this.stopReason = `余额已在保留线之下（当前余额 ${fmt(this.balance)} · 保留线 ${fmt(CONFIG.reserve)}）`;
             report(`🏁 ${this.stopReason}，停止`);
             return;
@@ -1064,6 +1065,11 @@ class Lottery {
                     vipSwapped = await this.reconcileVip(prize);
                 }
 
+                // ⚡ 关键保障：每抽完一注立刻落盘，保证任何时刻中断数据不丢
+                if (CONFIG.statsFile) {
+                    saveStats(this.current, this.total);
+                }
+
                 if (CONFIG.notifyBigPrize && isBigPrize(prize)) {
                     const bigPrizeNotice = renderBigPrizeNotification({
                         prize,
@@ -1084,8 +1090,10 @@ class Lottery {
 
                 await this.checkPeriodicReport();
 
-                if (!this.isContinuous && CONFIG.draws > 0 && this.current.draws >= CONFIG.draws) {
+                // 只要达到了设定次数，立即退出
+                if (CONFIG.draws > 0 && this.current.draws >= CONFIG.draws) {
                     this.stopReason = `已达到设定抽奖次数（${fmt(CONFIG.draws)} 抽）`;
+                    report(`🏁 ${this.stopReason}`);
                     break;
                 }
                 continue;
@@ -1324,18 +1332,18 @@ async function notify(title, content) {
     }
 }
 
-/* 监听退出信号，保存已抽数据并打印汇总 */
+/* 监听退出信号，保存已抽数据并发送停止通知 */
 function guardExit(lottery) {
     let bailing = false;
 
-    const bail = signal => async () => {
-        if (bailing) process.exit(130);
+    const handleExit = async (signal) => {
+        if (bailing) return;
         bailing = true;
 
-        log(`\n⚠️ 收到 ${signal}，先把已抽到的存下来再退出`);
-        if (lottery.current.draws > 0) {
+        log(`\n⚠️ 收到 ${signal} 停止信号，保存数据并发送通知...`);
+        if (lottery.current.draws > 0 && CONFIG.statsFile) {
             const file = saveStats(lottery.current, lottery.total);
-            if (file) log(`💾 统计已存到 ${file}`);
+            if (file) log(`💾 统计已安全存到 ${file}`);
         }
         raw(`\n${'─'.repeat(40)}\n${lottery.summary()}`);
 
@@ -1345,15 +1353,21 @@ function guardExit(lottery) {
             total: lottery.total,
             balance: lottery.balance,
             runningTimeStr: runningTime,
-            status: `收到 ${signal} 中断退出`
+            status: `收到 ${signal} 停止信号（手动停止）`
         });
-        await notify('🛑【HHCLUB 幸运大转盘】任务停止', finalReport);
 
-        process.exit(130);
+        try {
+            await notify('🛑【HHCLUB 幸运大转盘】任务停止', finalReport);
+        } catch (err) {
+            // ignore
+        }
+
+        process.exit(0);
     };
 
-    process.on('SIGINT', bail('Ctrl-C'));
-    process.on('SIGTERM', bail('SIGTERM'));
+    process.on('SIGINT', () => { handleExit('SIGINT'); });
+    process.on('SIGTERM', () => { handleExit('SIGTERM'); });
+    process.on('SIGHUP', () => { handleExit('SIGHUP'); });
 }
 
 async function main() {
@@ -1397,12 +1411,12 @@ async function main() {
 
     log('🎡 HHCLUB 幸运大转盘');
     if (configFile) log(`⚙️ 配置来自 ${configFile}`);
-    if (CONFIG.continuous) {
+    if (CONFIG.draws > 0) {
+        log(`🎯 运行模式：定量抽取 ${CONFIG.draws} 次（抽满自动停止并发送通知）· 间隔 ${CONFIG.interval} 秒`);
+    } else if (CONFIG.continuous) {
         log(`🔄 运行模式：后台持续挂机（无憨豆时休眠 ${CONFIG.sleepOnLowMinutes} 分钟 · 保留 ${fmt(CONFIG.reserve)} 憨豆）`);
     } else {
-        log(CONFIG.draws > 0
-            ? `   抽 ${CONFIG.draws} 次 · 间隔 ${CONFIG.interval} 秒`
-            : `   一抽到底 · 保留 ${fmt(CONFIG.reserve)} 憨豆 · 间隔 ${CONFIG.interval} 秒`);
+        log(`   一抽到底 · 保留 ${fmt(CONFIG.reserve)} 憨豆 · 间隔 ${CONFIG.interval} 秒`);
     }
     if (CONFIG.notifyBigPrize) {
         log(`🎉 大奖推送：已启用（命中 邀请 / VIP / ≥ ${fmt(CONFIG.bigPrizeMinBeans)} 憨豆 立即通知）`);
