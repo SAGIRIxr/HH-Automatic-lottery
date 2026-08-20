@@ -655,7 +655,7 @@ console.log('\n[19] 档位要挂在类别下面，光看「7 天 × 1」认不�
         /🎫 补签卡 2 次 · 2 个/.test(block), block);
     check('彩虹 ID 认得出来，不再是光秃秃的「7 天 × 1」',
         /🌈 彩虹ID 1 次 · 7 天/.test(block), block);
-    check('上传量也带上类别', /🚀 上传量 1 次 · 2 GB/.test(block), block);
+    check('上传量也带上类别', /📤 上传量 1 次 · 2 GB/.test(block), block);
 
     // 档位行缩进得比类别行深，视觉上才是从属关系
     const lines = block.split('\n');

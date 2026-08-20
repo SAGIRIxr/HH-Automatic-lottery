@@ -330,7 +330,7 @@ const PRIZE_META = {
     rainbow: { name: '彩虹ID', icon: '🌈', unit: '天' },
     vip: { name: 'VIP', icon: '⭐', unit: '天' },
     makeup: { name: '补签卡', icon: '🎫', unit: '个' },
-    upload: { name: '上传量', icon: '🚀', unit: 'GB' },
+    upload: { name: '上传量', icon: '📤', unit: 'GB' },
     rename: { name: '改名卡', icon: '📛', unit: '张' },
     unknown: { name: '其他奖品', icon: '🎁', unit: '' }
 };
@@ -714,7 +714,7 @@ function renderPeriodReport({ period, total, balance, periodMinutes, totalTimeSt
         `│ 持续运行：${totalTimeStr}`,
         `╰─ 播报时间：${stamp()}`,
         NOTICE_DIVIDER,
-        `🆕 此次播报增量`,
+        `⚡ 此次播报增量`,
         ...renderStatsOverview(period, { delta: true }),
         `  💰 当前余额：${fmt(balance)} 憨豆`,
         NOTICE_DIVIDER,
@@ -739,7 +739,7 @@ function renderFinalReport({ current, total, balance, runningTimeStr, status = '
         `│ 最终余额：${fmt(balance)} 憨豆`,
         `╰─ 结束时间：${stamp()}`,
         NOTICE_DIVIDER,
-        `🆕 本次运行增量`,
+        `⚡ 本次运行增量`,
         ...renderStatsOverview(current, { delta: true }),
         NOTICE_DIVIDER,
         `🎁 本次奖品明细`,
