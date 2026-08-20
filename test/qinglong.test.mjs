@@ -985,7 +985,8 @@ console.log('\n[32] 中途打断：成绩存下来，不触发清信');
 const hitokotoAtLoad = process.env.HITOKOTO;
 module.exports = {
     sendNotify: async (title, content) => {
-        await new Promise(resolve => setTimeout(resolve, 50));
+        // 故意延迟，证明主任务退出后 detached 发送器仍在工作。
+        await new Promise(resolve => setTimeout(resolve, 500));
         fs.appendFileSync(${JSON.stringify(notifyLog)}, title + '\\n' + content
             + '\\nHITOKOTO=' + hitokotoAtLoad + '\\n---END---\\n');
     }
@@ -1009,6 +1010,8 @@ module.exports = {
     fs.writeFileSync(file, installed);
 
     const { code, out } = await runFile(file, dir);
+    const parentExitedAt = Date.now();
+    await until(() => fs.existsSync(notifyLog), 10000, 50);
     const notifyContent = fs.existsSync(notifyLog) ? fs.readFileSync(notifyLog, 'utf8') : '';
 
     check('手动停止后正常退出', code === 0, `exit ${code}`);
@@ -1022,9 +1025,11 @@ module.exports = {
     check('打断时不清信，那封通知还在',
         site.state.mail.length === 1, site.state.mail.map(m => m.id).join(','));
     check('汇总照样打出来了', /本次：\d+ 抽/.test(out), out.slice(-400));
-    check('手动停止通知在退出前完整发送',
+    check('手动停止通知由独立发送器接管',
+        /手动停止通知已交给独立发送器/.test(out), out.slice(-800));
+    check('主任务退出后通知仍能完整发送',
         /🛑 HHCLUB 幸运大转盘｜手动停止/.test(notifyContent)
-        && /手动停止通知已发送/.test(out), notifyContent || out.slice(-800));
+        && fs.statSync(notifyLog).mtimeMs >= parentExitedAt, notifyContent || out.slice(-800));
     check('加载青龙通知模块时已禁用末尾随机标语',
         /HITOKOTO=false/.test(notifyContent), notifyContent);
 

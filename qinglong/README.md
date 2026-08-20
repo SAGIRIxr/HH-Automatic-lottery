@@ -186,7 +186,7 @@ ql raw https://raw.githubusercontent.com/Agonie0v0/HH-Automatic-lottery/main/qin
 
 ## 🛡️ 安全与中断保护
 
-- **Ctrl-C / 青龙停止任务**：主动接管青龙预加载的 `SIGTERM` 立即退出处理器，先安全落盘已抽数据，优先快速直连 Telegram，确认停止报告发送完成后再退出。
+- **Ctrl-C / 青龙停止任务**：主动接管青龙预加载的 `SIGTERM` 立即退出处理器，先安全落盘已抽数据，再启动脱离青龙任务进程组的独立发送器，主任务被继续强制终止也不会打断通知。
 - **原子落盘**：统计文件采用“临时文件写入 + 原子重命名”机制，即便遭遇断电也不会损坏原统计 JSON。
 - **自动防风控退避**：遭遇“重复点击/过于频繁”限流时自动拉长间隔，遇到连续错误安全停止。
 
@@ -200,4 +200,4 @@ ql raw https://raw.githubusercontent.com/Agonie0v0/HH-Automatic-lottery/main/qin
 node test/qinglong.test.mjs
 ```
 
-覆盖 41 个专项测试场景，共 167 项断言。
+覆盖 41 个专项测试场景，共 168 项断言。
