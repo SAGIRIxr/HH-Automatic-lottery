@@ -666,7 +666,7 @@ function renderStatsOverview(stats, { delta = false } = {}) {
         `  🎰 抽奖：${plus}${fmt(stats?.draws)} 抽`,
         `  💸 消耗：${minus}${fmt(cost)} 憨豆`,
         `  🎁 获得：${plus}${fmt(gained)} 憨豆${swapped > 0 ? `（含折算 ${fmt(swapped)}）` : ''}`,
-        `  ${profit >= 0 ? '📈' : '📉'} 净盈亏：${profit >= 0 ? '+' : ''}${fmt(profit)}（${profit >= 0 ? '+' : ''}${rate.toFixed(1)}%）`
+        `  ${profit >= 0 ? '🚀' : '✨'} 净盈亏：${profit >= 0 ? '+' : ''}${fmt(profit)}（${profit >= 0 ? '+' : ''}${rate.toFixed(1)}%）`
     ];
 }
 
@@ -700,7 +700,7 @@ function renderBigPrizeNotification({ prize, prizeText, drawIndex, totalDraws, b
         `  🎰 已抽：${fmt(stats.draws)} 抽`,
         `  💸 消耗：${fmt(stats.cost)} 憨豆`,
         `  🎁 获得：${fmt(gained)} 憨豆${vipSwappedBeans > 0 ? `（含 VIP 折算）` : ''}`,
-        `  ${profit >= 0 ? '📈' : '📉'} 净盈亏：${profit >= 0 ? '+' : ''}${fmt(profit)}（${profit >= 0 ? '+' : ''}${rate.toFixed(1)}%）`,
+        `  ${profit >= 0 ? '🚀' : '✨'} 净盈亏：${profit >= 0 ? '+' : ''}${fmt(profit)}（${profit >= 0 ? '+' : ''}${rate.toFixed(1)}%）`,
         `  💵 当前余额：${fmt(balance)} 憨豆`,
         NOTICE_DIVIDER,
         `🤖 ${CONFIG.continuous ? '后台持续挂机抽奖中' : '抽奖任务运行中'}`
