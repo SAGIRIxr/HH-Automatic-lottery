@@ -1445,50 +1445,6 @@ async function notify(title, content, { preferTelegram = false } = {}) {
     }
 }
 
-const DETACHED_NOTIFY_ARG = '--hh-detached-notify';
-const DETACHED_NOTIFY_ENV = 'HH_DETACHED_NOTIFY_PAYLOAD';
-
-/*
- * 青龙手动停止会在很短时间内向 task.sh / timeout / node 连续转发终止信号。
- * 即使主进程拦截了第一个 SIGTERM，也可能在网络请求完成前被外层再次结束。
- * 因此停止通知交给一个 detached 子进程：它在青龙开始 killTask 后才创建，
- * 不在已拍快照的进程树中，且拥有独立进程组，主任务被结束后仍能完成推送。
- */
-function spawnDetachedNotification(title, content) {
-    const payload = Buffer.from(JSON.stringify({ title, content }), 'utf8').toString('base64');
-    try {
-        const child = spawn(process.execPath, [__filename, DETACHED_NOTIFY_ARG], {
-            cwd: __dirname,
-            detached: true,
-            stdio: 'ignore',
-            windowsHide: true,
-            env: { ...process.env, [DETACHED_NOTIFY_ENV]: payload }
-        });
-        if (!child.pid) return false;
-        child.unref();
-        return true;
-    } catch (error) {
-        log(`⚠️ 独立停止通知发送器启动失败：${error?.message || error}`);
-        return false;
-    }
-}
-
-async function runDetachedNotification() {
-    const encoded = process.env[DETACHED_NOTIFY_ENV];
-    delete process.env[DETACHED_NOTIFY_ENV];
-    if (!encoded) return false;
-
-    let payload;
-    try {
-        payload = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
-    } catch (error) {
-        return false;
-    }
-    if (!payload?.title || !payload?.content) return false;
-
-    return notify(payload.title, payload.content, { preferTelegram: true });
-}
-
 /* 监听退出信号，保存已抽数据并发送停止通知 */
 function guardExit(lottery) {
     let stoppingPromise = null;
@@ -1515,19 +1471,11 @@ function guardExit(lottery) {
                 status: lottery.stopReason
             });
 
-            // 优先交给脱离青龙任务进程组的独立发送器，不再赌青龙会给异步网络请求留时间。
-            if (spawnDetachedNotification('🛑 HHCLUB 幸运大转盘｜手动停止', finalReport)) {
-                log('📨 手动停止通知已交给独立发送器');
-                await sleep(150);
-                process.exit(0);
-                return;
-            }
-
-            // 极少数环境无法创建 detached 进程时，在当前进程内做最后兜底。
+            // 在当前主进程内完成通知推送（设置 8 秒超时保护）
             const watchdog = setTimeout(() => {
                 log('⚠️ 停止通知等待超时，已保存数据并退出');
                 process.exit(0);
-            }, 35000);
+            }, 8000);
 
             try {
                 const sent = await notify('🛑 HHCLUB 幸运大转盘｜手动停止', finalReport, { preferTelegram: true });
@@ -1568,19 +1516,6 @@ async function main() {
     }
 
     const args = process.argv.slice(2);
-    if (args.includes(DETACHED_NOTIFY_ARG)) {
-        // 屏蔽所有退出/挂起信号，防止被青龙任务结束时的进程组清理连带杀死
-        ['SIGINT', 'SIGTERM', 'SIGHUP'].forEach(sig => {
-            try { process.on(sig, () => {}); } catch (e) {}
-        });
-
-        loadEnvConfig();
-        loadExternalConfig();
-        normalizeConfig();
-        const sent = await runDetachedNotification();
-        process.exit(sent ? 0 : 1);
-    }
-
     const importIdx = args.findIndex(arg => arg === '--import' || arg === '-i' || arg === 'import');
     if (importIdx >= 0 && args[importIdx + 1]) {
         const targetFile = args[importIdx + 1];

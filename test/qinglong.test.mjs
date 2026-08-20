@@ -1025,11 +1025,10 @@ module.exports = {
     check('打断时不清信，那封通知还在',
         site.state.mail.length === 1, site.state.mail.map(m => m.id).join(','));
     check('汇总照样打出来了', /本次：\d+ 抽/.test(out), out.slice(-400));
-    check('手动停止通知由独立发送器接管',
-        /手动停止通知已交给独立发送器/.test(out), out.slice(-800));
-    check('主任务退出后通知仍能完整发送',
-        /🛑 HHCLUB 幸运大转盘｜手动停止/.test(notifyContent)
-        && fs.statSync(notifyLog).mtimeMs >= parentExitedAt, notifyContent || out.slice(-800));
+    check('手动停止通知已成功发送',
+        /手动停止通知已发送/.test(out), out.slice(-800));
+    check('任务结束前通知已完整发送',
+        /🛑 HHCLUB 幸运大转盘｜手动停止/.test(notifyContent), notifyContent || out.slice(-800));
     check('加载青龙通知模块时已禁用末尾随机标语',
         /HITOKOTO=false/.test(notifyContent), notifyContent);
 
