@@ -655,7 +655,7 @@ console.log('\n[19] 档位要挂在类别下面，光看「7 天 × 1」认不�
         /🎫 补签卡 2 次 · 2 个/.test(block), block);
     check('彩虹 ID 认得出来，不再是光秃秃的「7 天 × 1」',
         /🌈 彩虹ID 1 次 · 7 天/.test(block), block);
-    check('上传量也带上类别', /⬆️ 上传量 1 次 · 2 GB/.test(block), block);
+    check('上传量也带上类别', /🚀 上传量 1 次 · 2 GB/.test(block), block);
 
     // 档位行缩进得比类别行深，视觉上才是从属关系
     const lines = block.split('\n');
@@ -1123,7 +1123,7 @@ module.exports = {
     check('日志报了 3 次大奖命中', (out.match(/命中大奖/g) || []).length === 3, out.slice(-800));
 
     const notifyContent = fs.existsSync(notifyLog) ? fs.readFileSync(notifyLog, 'utf8') : '';
-    check('邀请大奖推了通知', /命中大奖：📧 邀请码 1 个/.test(notifyContent));
+    check('邀请大奖推了通知', /命中大奖：💌 邀请码 1 个/.test(notifyContent));
     check('78w 憨豆大奖推了通知', /命中大奖：💰 780,000 憨豆/.test(notifyContent));
     check('VIP 大奖推了通知', /命中大奖：⭐ VIP 7 天/.test(notifyContent));
     check('通知带了卡片分隔线和运行战报', /━━━━━━━━━━━━━━━━━━━/.test(notifyContent));

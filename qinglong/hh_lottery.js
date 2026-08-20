@@ -326,11 +326,11 @@ function numberAfterClass(html, className) {
 const PRIZE_META = {
     beans: { name: '憨豆', icon: '💰', unit: '' },
     magic: { name: '憨豆（旧魔力）', icon: '💰', unit: '' },
-    invite: { name: '邀请', icon: '📧', unit: '' },
+    invite: { name: '邀请', icon: '💌', unit: '' },
     rainbow: { name: '彩虹ID', icon: '🌈', unit: '天' },
     vip: { name: 'VIP', icon: '⭐', unit: '天' },
     makeup: { name: '补签卡', icon: '🎫', unit: '个' },
-    upload: { name: '上传量', icon: '⬆️', unit: 'GB' },
+    upload: { name: '上传量', icon: '🚀', unit: 'GB' },
     rename: { name: '改名卡', icon: '📛', unit: '张' },
     unknown: { name: '其他奖品', icon: '🎁', unit: '' }
 };
@@ -655,7 +655,7 @@ function renderPrizeDetails(stats, emptyText = '暂无奖品记录') {
                 .map(([label, count]) => `     └ ${label} × ${fmt(count)}`);
             return [head, ...tiers];
         });
-    return rows.length ? rows : [`  • ${emptyText}`];
+    return rows.length ? rows : [`  ✨ ${emptyText}`];
 }
 
 function renderStatsOverview(stats, { delta = false } = {}) {
@@ -663,8 +663,8 @@ function renderStatsOverview(stats, { delta = false } = {}) {
     const plus = delta ? '+' : '';
     const minus = delta ? '-' : '';
     return [
-        `  🎰 抽奖：${plus}${fmt(stats?.draws)} 抽`,
-        `  💸 消耗：${minus}${fmt(cost)} 憨豆`,
+        `  🎲 抽奖：${plus}${fmt(stats?.draws)} 抽`,
+        `  🔥 消耗：${minus}${fmt(cost)} 憨豆`,
         `  🎁 获得：${plus}${fmt(gained)} 憨豆${swapped > 0 ? `（含折算 ${fmt(swapped)}）` : ''}`,
         `  ${profit >= 0 ? '🚀' : '✨'} 净盈亏：${profit >= 0 ? '+' : ''}${fmt(profit)}（${profit >= 0 ? '+' : ''}${rate.toFixed(1)}%）`
     ];
@@ -680,7 +680,7 @@ function renderBigPrizeNotification({ prize, prizeText, drawIndex, totalDraws, b
             prizeDisplay = `⭐ VIP ${fmt(prize.value)} 天`;
         }
     } else if (prize.type === 'invite') {
-        prizeDisplay = `📧 邀请码 ${fmt(prize.value)} 个`;
+        prizeDisplay = `💌 邀请码 ${fmt(prize.value)} 个`;
     } else if (prize.type === 'beans') {
         prizeDisplay = `💰 ${fmt(prize.value)} 憨豆`;
     } else {
@@ -697,26 +697,26 @@ function renderBigPrizeNotification({ prize, prizeText, drawIndex, totalDraws, b
         `╰─ 历史累计：${fmt(totalDraws)} 抽`,
         NOTICE_DIVIDER,
         `📊 本次运行数据`,
-        `  🎰 已抽：${fmt(stats.draws)} 抽`,
-        `  💸 消耗：${fmt(stats.cost)} 憨豆`,
+        `  🎲 已抽：${fmt(stats.draws)} 抽`,
+        `  🔥 消耗：${fmt(stats.cost)} 憨豆`,
         `  🎁 获得：${fmt(gained)} 憨豆${vipSwappedBeans > 0 ? `（含 VIP 折算）` : ''}`,
         `  ${profit >= 0 ? '🚀' : '✨'} 净盈亏：${profit >= 0 ? '+' : ''}${fmt(profit)}（${profit >= 0 ? '+' : ''}${rate.toFixed(1)}%）`,
-        `  💵 当前余额：${fmt(balance)} 憨豆`,
+        `  💰 当前余额：${fmt(balance)} 憨豆`,
         NOTICE_DIVIDER,
-        `🤖 ${CONFIG.continuous ? '后台持续挂机抽奖中' : '抽奖任务运行中'}`
+        `🌟 ${CONFIG.continuous ? '后台持续挂机抽奖中' : '抽奖任务运行中'}`
     ].join('\n');
 }
 
 function renderPeriodReport({ period, total, balance, periodMinutes, totalTimeStr }) {
     return [
-        `╭─ ⏱️ 播报概览`,
+        `╭─ ⏰ 播报概览`,
         `│ 统计区间：近 ${periodMinutes} 分钟`,
         `│ 持续运行：${totalTimeStr}`,
         `╰─ 播报时间：${stamp()}`,
         NOTICE_DIVIDER,
         `🆕 此次播报增量`,
         ...renderStatsOverview(period, { delta: true }),
-        `  💵 当前余额：${fmt(balance)} 憨豆`,
+        `  💰 当前余额：${fmt(balance)} 憨豆`,
         NOTICE_DIVIDER,
         `🎁 此次奖品明细`,
         ...renderPrizeDetails(period, '本时段无抽奖记录（休眠 / 待机中）'),
@@ -724,10 +724,10 @@ function renderPeriodReport({ period, total, balance, periodMinutes, totalTimeSt
         `🏆 历史累计总量（含此次增量）`,
         ...renderStatsOverview(total),
         NOTICE_DIVIDER,
-        `🗂️ 历史奖品明细`,
+        `📜 历史奖品明细`,
         ...renderPrizeDetails(total, '暂无历史奖品记录'),
         NOTICE_DIVIDER,
-        `🤖 ${CONFIG.continuous ? '后台持续监控与抽奖中' : '抽奖任务运行中'} · 下次播报约 ${CONFIG.reportIntervalMinutes} 分钟后`
+        `🌟 ${CONFIG.continuous ? '后台持续监控与抽奖中' : '抽奖任务运行中'} · 下次播报约 ${CONFIG.reportIntervalMinutes} 分钟后`
     ].join('\n');
 }
 
@@ -748,7 +748,7 @@ function renderFinalReport({ current, total, balance, runningTimeStr, status = '
         `🏆 历史累计总览（含本次）`,
         ...renderStatsOverview(total),
         NOTICE_DIVIDER,
-        `🗂️ 历史奖品明细`,
+        `📜 历史奖品明细`,
         ...renderPrizeDetails(total, '暂无历史奖品记录')
     ];
     return lines.join('\n');
