@@ -5,7 +5,8 @@
  * cron: 5 9 * * *
  *
  * 特性：
- *   - 🔄 后台持续挂机：憨豆不足自动休眠等待做种产出，回血后继续自动抽
+ *   - 🛑 达到设定次数或憨豆不足时自动停止，并推送最终统计通知
+ *   - 🔄 可选后台持续挂机：憨豆不足自动休眠等待做种产出，回血后继续自动抽
  *   - 🎉 大奖即时推送：命中 邀请、VIP（或折算憨豆）、78w+ 憨豆等大奖即时推送
  *   - 📊 周期统计简报：每隔 1 小时（或自定义频率）推送运行简报卡片
  *   - 💾 统计导入导出：支持导出和合并导入历史备份 JSON 文件
@@ -36,10 +37,11 @@ const CONFIG = {
     cookie: '在这里粘贴你的 Cookie',
 
     /* ② 每次运行抽多少次。
+          达到该次数后自动停止并发送统计通知。
           填 0 = 一抽到底，一直抽到余额跌破下面的保留线为止 */
     draws: 10,
 
-    /* ③ 一抽到底 / 后台持续模式时给自己留多少憨豆不动 */
+    /* ③ 一抽到底 / 挂机模式时给自己留多少憨豆不动 */
     reserve: 0,
 
     /* ④ 每抽间隔（秒）。站点有重复点击风控，别贪快，最小 3 */
@@ -52,7 +54,7 @@ const CONFIG = {
 
     /* ⑥ 后台持续挂机抽奖模式。
           true = 余额不足时自动休眠等待做种产出，不退出，后台一直抽；
-          false = 抽完设定次数或余额不足即正常退出（普通定时任务模式） */
+          false = 达到设定次数或余额不足即停止并发送统计通知（默认推荐） */
     continuous: false,
 
     /* ⑦ 持续模式下，余额不足时的休眠检查间隔（分钟）。默认 10 分钟 */
@@ -687,13 +689,13 @@ function renderPeriodReport({ period, current, total, balance, periodMinutes, to
     ].join('\n');
 }
 
-function renderFinalReport({ current, total, balance, runningTimeStr, status = '已完成' }) {
-    const cBeans = current.gains.beans || 0;
+function renderFinalReport({ current, total, balance, runningTimeStr, status = '正常结束' }) {
+    const cBeans = current.gains?.beans || 0;
     const cProfit = cBeans - current.cost;
     const cRate = current.cost > 0 ? ((cProfit / current.cost) * 100).toFixed(1) : '0.0';
     const swapped = swappedBeansTotal(current);
 
-    const prizeRows = Object.entries(current.prizes)
+    const prizeRows = Object.entries(current.prizes || {})
         .filter(([, bucket]) => bucket.count > 0)
         .sort((a, b) => b[1].count - a[1].count)
         .flatMap(([type, bucket]) => {
@@ -712,18 +714,19 @@ function renderFinalReport({ current, total, balance, runningTimeStr, status = '
     const lines = [
         `🎡【HHCLUB 幸运大转盘 · 运行总报】`,
         `━━━━━━━━━━━━━━━━━━━`,
-        `⏱️ 运行时长：${runningTimeStr} | 状态：${status}`,
+        `🛑 运行状态：${status}`,
+        `⏱️ 运行时长：${runningTimeStr}`,
         `🎰 本次已抽：${fmt(current.draws)} 抽`,
         `💰 憨豆收支：消耗 ${fmt(current.cost)} · 获得 ${fmt(cBeans)}${swapped > 0 ? `（含折算 ${fmt(swapped)}）` : ''}`,
         `📈 本次盈亏：${cProfit >= 0 ? '+' : ''}${fmt(cProfit)}（${cProfit >= 0 ? '+' : ''}${cRate}%）`,
         `💵 最终余额：${fmt(balance)} 憨豆`,
         `━━━━━━━━━━━━━━━━━━━`,
-        `🎁 奖品明细：`,
-        ...(prizeRows.length > 0 ? prizeRows : ['  暂无中奖数据'])
+        `🎁 本次中奖明细：`,
+        ...(prizeRows.length > 0 ? prizeRows : ['  本次无中奖数据'])
     ];
 
     if (CONFIG.statsFile && total && total.draws > current.draws) {
-        const tBeans = total.gains.beans || 0;
+        const tBeans = total.gains?.beans || 0;
         const tProfit = tBeans - total.cost;
         const tRate = total.cost > 0 ? ((tProfit / total.cost) * 100).toFixed(1) : '0.0';
         lines.push(
@@ -751,6 +754,7 @@ class Lottery {
 
         this.balance = 0;
         this.cost = 2000;
+        this.stopReason = '';
 
         this.startedAt = Date.now();
         this.current = emptyStats();
@@ -912,20 +916,27 @@ class Lottery {
     shouldContinue() {
         if (this.isContinuous) {
             if (this.deadline > 0 && Date.now() > this.deadline) {
-                report(`⏰ 到达单次运行时间上限（${CONFIG.maxMinutes} 分钟），收工`);
+                this.stopReason = `到达单次运行时间上限（${CONFIG.maxMinutes} 分钟）`;
+                report(`⏰ ${this.stopReason}，收工`);
                 return false;
             }
             return true;
         }
 
         if (this.deadline > 0 && Date.now() > this.deadline) {
-            report(`⏰ 到达单次运行时间上限（${CONFIG.maxMinutes} 分钟），收工`);
+            this.stopReason = `到达单次运行时间上限（${CONFIG.maxMinutes} 分钟）`;
+            report(`⏰ ${this.stopReason}，收工`);
             return false;
         }
-        if (CONFIG.draws > 0) return this.current.draws < CONFIG.draws;
+
+        if (CONFIG.draws > 0 && this.current.draws >= CONFIG.draws) {
+            this.stopReason = `已达到设定抽奖次数（${fmt(CONFIG.draws)} 抽）`;
+            return false;
+        }
 
         if (this.balance - this.cost < CONFIG.reserve) {
-            report(`🏁 一抽到底完成，余额 ${fmt(this.balance)}（保留线 ${fmt(CONFIG.reserve)}）`);
+            this.stopReason = `一抽到底完成，余额 ${fmt(this.balance)}（保留线 ${fmt(CONFIG.reserve)}）`;
+            report(`🏁 ${this.stopReason}`);
             return false;
         }
         return true;
@@ -968,15 +979,16 @@ class Lottery {
 
         report(`▶ 开始 · 余额 ${fmt(this.balance)} 憨豆 · 单抽 ${fmt(this.cost)}`);
 
-        if (!this.isContinuous) {
-            if (this.balance < this.cost) {
-                report('💸 憨豆不足，跳过');
-                return;
-            }
-            if (CONFIG.draws === 0 && this.balance - this.cost < CONFIG.reserve) {
-                report('💸 余额已在保留线之下，跳过');
-                return;
-            }
+        if (this.balance < this.cost) {
+            this.stopReason = `憨豆不足（当前余额 ${fmt(this.balance)} · 单抽需 ${fmt(this.cost)}）`;
+            report(`💸 ${this.stopReason}，停止`);
+            return;
+        }
+
+        if (CONFIG.draws === 0 && this.balance - this.cost < CONFIG.reserve) {
+            this.stopReason = `余额已在保留线之下（当前余额 ${fmt(this.balance)} · 保留线 ${fmt(CONFIG.reserve)}）`;
+            report(`🏁 ${this.stopReason}，停止`);
+            return;
         }
 
         let firstRound = true;
@@ -986,8 +998,13 @@ class Lottery {
 
             if (needsWait) {
                 if (!this.isContinuous) {
-                    if (this.balance < this.cost) report('💸 憨豆不足，停止');
-                    else report(`🏁 余额已在保留线之下（余额 ${fmt(this.balance)} / 保留 ${fmt(CONFIG.reserve)}），停止`);
+                    if (this.balance < this.cost) {
+                        this.stopReason = `憨豆不足（当前余额 ${fmt(this.balance)} · 单抽需 ${fmt(this.cost)}）`;
+                        report(`💸 ${this.stopReason}，停止`);
+                    } else {
+                        this.stopReason = `余额已达保留线（当前余额 ${fmt(this.balance)} · 保留线 ${fmt(CONFIG.reserve)}）`;
+                        report(`🏁 ${this.stopReason}，停止`);
+                    }
                     break;
                 }
 
@@ -1022,7 +1039,8 @@ class Lottery {
                 this.errorStreak++;
                 log(`❌ 请求失败（HTTP ${result.status}）`);
                 if (this.errorStreak >= RUNTIME.maxErrors) {
-                    report(`🛑 连续 ${this.errorStreak} 次失败，停止`);
+                    this.stopReason = `连续 ${this.errorStreak} 次请求失败`;
+                    report(`🛑 ${this.stopReason}，停止`);
                     return;
                 }
                 continue;
@@ -1065,6 +1083,11 @@ class Lottery {
                 }
 
                 await this.checkPeriodicReport();
+
+                if (!this.isContinuous && CONFIG.draws > 0 && this.current.draws >= CONFIG.draws) {
+                    this.stopReason = `已达到设定抽奖次数（${fmt(CONFIG.draws)} 抽）`;
+                    break;
+                }
                 continue;
             }
 
@@ -1079,7 +1102,8 @@ class Lottery {
                     log(`🔄 间隔上调到 ${(this.intervalMs / 1000).toFixed(1)} 秒`);
                 }
                 if (this.rateLimitStreak >= RUNTIME.maxRateLimits) {
-                    report(`🛑 连续 ${this.rateLimitStreak} 次被限流，停止`);
+                    this.stopReason = `连续 ${this.rateLimitStreak} 次被限流`;
+                    report(`🛑 ${this.stopReason}，停止`);
                     return;
                 }
                 continue;
@@ -1090,6 +1114,7 @@ class Lottery {
                     this.balance = 0;
                     continue;
                 }
+                this.stopReason = msg;
                 report(`🛑 ${msg}，停止`);
                 return;
             }
@@ -1097,7 +1122,8 @@ class Lottery {
             this.errorStreak++;
             log(`❌ ${msg}`);
             if (this.errorStreak >= RUNTIME.maxErrors) {
-                report(`🛑 连续 ${this.errorStreak} 次失败，停止`);
+                this.stopReason = `连续 ${this.errorStreak} 次失败：${msg}`;
+                report(`🛑 ${this.stopReason}，停止`);
                 return;
             }
         }
@@ -1336,7 +1362,6 @@ async function main() {
         process.exit(1);
     }
 
-    // 处理 CLI 导入指令: node hh_lottery.js --import <file>
     const args = process.argv.slice(2);
     const importIdx = args.findIndex(arg => arg === '--import' || arg === '-i' || arg === 'import');
     if (importIdx >= 0 && args[importIdx + 1]) {
@@ -1349,7 +1374,6 @@ async function main() {
     const configFile = loadExternalConfig();
     normalizeConfig();
 
-    // 如果配置了 importFile，则启动前合并导入
     if (CONFIG.importFile) {
         importStatsFile(CONFIG.importFile);
     }
@@ -1394,6 +1418,7 @@ async function main() {
         await lottery.run();
     } catch (error) {
         report(`❌ ${error?.message || error}`);
+        lottery.stopReason = `异常终止：${error?.message || error}`;
     }
 
     if (lottery.current.draws > 0) {
@@ -1418,7 +1443,7 @@ async function main() {
         total: lottery.total,
         balance: lottery.balance,
         runningTimeStr: runningTime,
-        status: '正常结束'
+        status: lottery.stopReason || (lottery.current.draws >= CONFIG.draws ? `已达到设定抽奖次数（${fmt(lottery.current.draws)} 抽）` : '正常结束')
     });
 
     await notify('🎡【HHCLUB 幸运大转盘】运行总报', finalReport);

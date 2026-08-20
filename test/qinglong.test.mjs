@@ -1176,9 +1176,70 @@ console.log('\n[38] 历史记录导入（CLI 与合并）');
 }
 
 /* ---------------------------------------------------------------- */
+console.log('\n[39] 憨豆不足或达到设定次数时停止并发送统计通知');
+{
+    const siteA = await startSite({
+        prizes: ['魔力 100 '],
+        balance: 500
+    });
+
+    const notifyLogA = path.join(TMP, 'notify-low-beans.log');
+    const mockSendNotifyA = `const fs = require('fs');
+module.exports = {
+    sendNotify: async (title, content) => {
+        fs.appendFileSync(${JSON.stringify(notifyLogA)}, title + '\\n' + content + '\\n---END---\\n');
+    }
+};`;
+
+    const { dir: dirA, file: fileA } = installScript(
+        { host: siteA.state.origin, draws: 10, continuous: false },
+        null,
+        { 'sendNotify.js': mockSendNotifyA }
+    );
+
+    const { code: codeA, out: outA } = await runFile(fileA, dirA);
+    check('憨豆不足时正常退出', codeA === 0, `exit ${codeA}`);
+    check('日志报了憨豆不足停止', /憨豆不足.*停止/.test(outA), outA);
+
+    const notifyContentA = fs.existsSync(notifyLogA) ? fs.readFileSync(notifyLogA, 'utf8') : '';
+    check('憨豆不足时发送了统计通知', /【HHCLUB 幸运大转盘】运行总报/.test(notifyContentA));
+    check('通知中包含憨豆不足状态', /憨豆不足/.test(notifyContentA));
+    await siteA.close();
+
+    const siteB = await startSite({
+        prizes: ['魔力 100 '],
+        balance: 100000
+    });
+
+    const notifyLogB = path.join(TMP, 'notify-draws-reached.log');
+    const mockSendNotifyB = `const fs = require('fs');
+module.exports = {
+    sendNotify: async (title, content) => {
+        fs.appendFileSync(${JSON.stringify(notifyLogB)}, title + '\\n' + content + '\\n---END---\\n');
+    }
+};`;
+
+    const { dir: dirB, file: fileB } = installScript(
+        { host: siteB.state.origin, draws: 2, continuous: false },
+        null,
+        { 'sendNotify.js': mockSendNotifyB }
+    );
+
+    const { code: codeB } = await runFile(fileB, dirB);
+    check('达到设定次数时正常退出', codeB === 0, `exit ${codeB}`);
+    check('刚好抽了 2 次', siteB.state.draws === 2, `实际 ${siteB.state.draws}`);
+
+    const notifyContentB = fs.existsSync(notifyLogB) ? fs.readFileSync(notifyLogB, 'utf8') : '';
+    check('达到次数后发送了统计通知', /【HHCLUB 幸运大转盘】运行总报/.test(notifyContentB));
+    check('通知中包含达到设定抽奖次数', /已达到设定抽奖次数/.test(notifyContentB));
+    await siteB.close();
+}
+
+/* ---------------------------------------------------------------- */
 fs.rmSync(TMP, { recursive: true, force: true });
 
 console.log(`\n=========== ${passed} passed, ${failed} failed ===========\n`);
 process.exit(failed ? 1 : 0);
+
 
 
