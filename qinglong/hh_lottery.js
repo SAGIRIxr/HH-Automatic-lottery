@@ -1508,9 +1508,6 @@ async function main() {
         }
     }
 
-    const summary = lottery.summary();
-    raw(`\n${'─'.repeat(40)}\n${summary}`);
-
     const runningTime = formatDuration(Date.now() - lottery.startedAt);
     const finalReport = renderFinalReport({
         current: lottery.current,
@@ -1521,6 +1518,9 @@ async function main() {
     });
 
     await notify('🎡【HHCLUB 幸运大转盘】运行总报', finalReport);
+
+    const summary = lottery.summary();
+    raw(`\n${'─'.repeat(40)}\n${summary}`);
 }
 
 main().catch(error => {
