@@ -561,7 +561,7 @@ function markVipSwapped(stats, prize, beans) {
 
 /* 所有类别里被折算成憨豆的总额。 */
 function swappedBeansTotal(stats) {
-    return Object.values(stats.prizes)
+    return Object.values(stats?.prizes || {})
         .reduce((sum, bucket) => sum + (Number(bucket.swappedBeans) || 0), 0);
 }
 
@@ -617,6 +617,58 @@ function saveStats(current, total) {
    通知渲染模板（卡片式美化排版）
 ========================================================= */
 
+const NOTICE_DIVIDER = `━━━━━━━━━━━━━━━━━━━`;
+
+function statsMetrics(stats) {
+    const gained = Number(stats?.gains?.beans) || 0;
+    const cost = Number(stats?.cost) || 0;
+    const profit = gained - cost;
+    const rate = cost > 0 ? (profit / cost) * 100 : 0;
+    return { gained, cost, profit, rate, swapped: swappedBeansTotal(stats || emptyStats()) };
+}
+
+function prizeValueSummary(type, bucket) {
+    const value = Number(bucket?.value) || 0;
+    const swapped = Number(bucket?.swappedBeans) || 0;
+    const unitMap = {
+        beans: '憨豆', magic: '憨豆', invite: '个', rainbow: '天',
+        vip: '天', makeup: '个', upload: 'GB', rename: '张'
+    };
+    const parts = [];
+    if (value > 0) parts.push(`${fmt(value)}${unitMap[type] ? ` ${unitMap[type]}` : ''}`);
+    if (swapped > 0) parts.push(`折算 ${fmt(swapped)} 憨豆`);
+    return parts.join(' · ');
+}
+
+function renderPrizeDetails(stats, emptyText = '暂无奖品记录') {
+    const rows = Object.entries(stats?.prizes || {})
+        .filter(([, bucket]) => Number(bucket?.count) > 0)
+        .sort((a, b) => b[1].count - a[1].count)
+        .flatMap(([type, bucket]) => {
+            const meta = PRIZE_META[type] || PRIZE_META.unknown;
+            const value = prizeValueSummary(type, bucket);
+            const head = `  ${meta.icon} ${meta.name}｜${fmt(bucket.count)} 次${value ? ` · ${value}` : ''}`;
+            const tiers = Object.entries(bucket.tiers || {})
+                .filter(([, count]) => Number(count) > 0)
+                .sort((a, b) => b[1] - a[1])
+                .map(([label, count]) => `     └ ${label} × ${fmt(count)}`);
+            return [head, ...tiers];
+        });
+    return rows.length ? rows : [`  • ${emptyText}`];
+}
+
+function renderStatsOverview(stats, { delta = false } = {}) {
+    const { gained, cost, profit, rate, swapped } = statsMetrics(stats);
+    const plus = delta ? '+' : '';
+    const minus = delta ? '-' : '';
+    return [
+        `  🎰 抽奖：${plus}${fmt(stats?.draws)} 抽`,
+        `  💸 消耗：${minus}${fmt(cost)} 憨豆`,
+        `  🎁 获得：${plus}${fmt(gained)} 憨豆${swapped > 0 ? `（含折算 ${fmt(swapped)}）` : ''}`,
+        `  ${profit >= 0 ? '📈' : '📉'} 净盈亏：${profit >= 0 ? '+' : ''}${fmt(profit)}（${profit >= 0 ? '+' : ''}${rate.toFixed(1)}%）`
+    ];
+}
+
 function renderBigPrizeNotification({ prize, prizeText, drawIndex, totalDraws, balance, stats, vipSwappedBeans = 0 }) {
     const meta = PRIZE_META[prize.type] || PRIZE_META.unknown;
     let prizeDisplay = '';
@@ -634,139 +686,70 @@ function renderBigPrizeNotification({ prize, prizeText, drawIndex, totalDraws, b
         prizeDisplay = `${meta.icon} ${prize.label || prizeText.trim()}`;
     }
 
-    const beansGained = stats.gains.beans || 0;
-    const profit = beansGained - stats.cost;
-    const rate = stats.cost > 0 ? ((profit / stats.cost) * 100).toFixed(1) : '0.0';
+    const { gained, profit, rate } = statsMetrics(stats);
 
     return [
-        `🎉【HHCLUB 幸运大转盘 · 欧皇降临】`,
-        `━━━━━━━━━━━━━━━━━━━`,
-        `🎁 命中大奖：${prizeDisplay}`,
-        `🕒 中奖时间：${stamp()}`,
-        `🎯 当前抽数：本次第 ${fmt(drawIndex)} 抽${totalDraws > drawIndex ? `（历史累计 ${fmt(totalDraws)} 抽）` : ''}`,
-        `💰 当前余额：${fmt(balance)} 憨豆`,
-        `━━━━━━━━━━━━━━━━━━━`,
-        `📈 本次运行战报：`,
-        `  • 已抽次数：${fmt(stats.draws)} 抽`,
-        `  • 消耗憨豆：${fmt(stats.cost)}`,
-        `  • 获得憨豆：${fmt(beansGained)}${vipSwappedBeans > 0 ? `（含 VIP 折算）` : ''}`,
-        `  • 累计盈亏：${profit >= 0 ? '+' : ''}${fmt(profit)}（${profit >= 0 ? '+' : ''}${rate}%）`,
-        `━━━━━━━━━━━━━━━━━━━`,
-        `🤖 状态：${CONFIG.continuous ? '后台持续挂机抽奖中...' : '抽奖任务运行中...'}`
+        `╭─ 🎊 欧皇降临`,
+        `│ 命中大奖：${prizeDisplay}`,
+        `│ 中奖时间：${stamp()}`,
+        `│ 当前抽数：本次第 ${fmt(drawIndex)} 抽`,
+        `╰─ 历史累计：${fmt(totalDraws)} 抽`,
+        NOTICE_DIVIDER,
+        `📊 本次运行数据`,
+        `  🎰 已抽：${fmt(stats.draws)} 抽`,
+        `  💸 消耗：${fmt(stats.cost)} 憨豆`,
+        `  🎁 获得：${fmt(gained)} 憨豆${vipSwappedBeans > 0 ? `（含 VIP 折算）` : ''}`,
+        `  ${profit >= 0 ? '📈' : '📉'} 净盈亏：${profit >= 0 ? '+' : ''}${fmt(profit)}（${profit >= 0 ? '+' : ''}${rate.toFixed(1)}%）`,
+        `  💵 当前余额：${fmt(balance)} 憨豆`,
+        NOTICE_DIVIDER,
+        `🤖 ${CONFIG.continuous ? '后台持续挂机抽奖中' : '抽奖任务运行中'}`
     ].join('\n');
 }
 
 function renderPeriodReport({ period, total, balance, periodMinutes, totalTimeStr }) {
-    const pBeans = period.gains.beans || 0;
-    const pProfit = pBeans - period.cost;
-    const pRate = period.cost > 0 ? ((pProfit / period.cost) * 100).toFixed(1) : '0.0';
-
-    const tBeans = total.gains.beans || 0;
-    const tProfit = tBeans - total.cost;
-    const tRate = total.cost > 0 ? ((tProfit / total.cost) * 100).toFixed(1) : '0.0';
-
-    const pSwapped = swappedBeansTotal(period);
-    const tSwapped = swappedBeansTotal(total);
-
-    const prizeRows = Object.entries(period.prizes)
-        .filter(([, bucket]) => bucket.count > 0)
-        .sort((a, b) => b[1].count - a[1].count)
-        .map(([type, bucket]) => {
-            const meta = PRIZE_META[type] || PRIZE_META.unknown;
-            const totalBucket = total.prizes[type] || { count: 0, value: 0, swappedBeans: 0 };
-            const describe = item => {
-                const sums = [];
-                if (item.value > 0) sums.push(`${fmt(item.value)}${meta.unit ? ' ' + meta.unit : ''}`);
-                if (item.swappedBeans > 0) sums.push(`折算 ${fmt(item.swappedBeans)} 憨豆`);
-                return sums.length ? `（${sums.join(' · ')}）` : '';
-            };
-
-            return [
-                `  ${meta.icon} ${meta.name}：+${fmt(bucket.count)} 次${describe(bucket)}`,
-                `     ↳ 历史累计 ${fmt(totalBucket.count)} 次${describe(totalBucket)}`
-            ].join('\n');
-        });
-
-    const prizeSection = prizeRows.length > 0
-        ? `🎁 增量奖品明细：\n${prizeRows.join('\n')}`
-        : `🎁 增量奖品明细：本时段无抽奖记录（休眠 / 待机中）`;
-
     return [
-        `╭─ ⏱️ 定时战报`,
+        `╭─ ⏱️ 播报概览`,
         `│ 统计区间：近 ${periodMinutes} 分钟`,
         `│ 持续运行：${totalTimeStr}`,
         `╰─ 播报时间：${stamp()}`,
-        `━━━━━━━━━━━━━━━━━━━`,
+        NOTICE_DIVIDER,
         `🆕 此次播报增量`,
-        `  🎰 抽奖：+${fmt(period.draws)} 抽`,
-        `  💸 消耗：-${fmt(period.cost)} 憨豆`,
-        `  🎁 获得：+${fmt(pBeans)} 憨豆${pSwapped > 0 ? `（含折算 ${fmt(pSwapped)}）` : ''}`,
-        `  ${pProfit >= 0 ? '📈' : '📉'} 净盈亏：${pProfit >= 0 ? '+' : ''}${fmt(pProfit)}（${pProfit >= 0 ? '+' : ''}${pRate}%）`,
-        `━━━━━━━━━━━━━━━━━━━`,
-        prizeSection,
-        `━━━━━━━━━━━━━━━━━━━`,
-        `🏆 历史累计总量（含此次增量）`,
-        `  🎰 总抽奖：${fmt(total.draws)} 抽`,
-        `  💸 总消耗：${fmt(total.cost)} 憨豆`,
-        `  🎁 总获得：${fmt(tBeans)} 憨豆${tSwapped > 0 ? `（含折算 ${fmt(tSwapped)}）` : ''}`,
-        `  ${tProfit >= 0 ? '📈' : '📉'} 总盈亏：${tProfit >= 0 ? '+' : ''}${fmt(tProfit)}（${tProfit >= 0 ? '+' : ''}${tRate}%）`,
+        ...renderStatsOverview(period, { delta: true }),
         `  💵 当前余额：${fmt(balance)} 憨豆`,
-        `━━━━━━━━━━━━━━━━━━━`,
+        NOTICE_DIVIDER,
+        `🎁 此次奖品明细`,
+        ...renderPrizeDetails(period, '本时段无抽奖记录（休眠 / 待机中）'),
+        NOTICE_DIVIDER,
+        `🏆 历史累计总量（含此次增量）`,
+        ...renderStatsOverview(total),
+        NOTICE_DIVIDER,
+        `🗂️ 历史奖品明细`,
+        ...renderPrizeDetails(total, '暂无历史奖品记录'),
+        NOTICE_DIVIDER,
         `🤖 ${CONFIG.continuous ? '后台持续监控与抽奖中' : '抽奖任务运行中'} · 下次播报约 ${CONFIG.reportIntervalMinutes} 分钟后`
     ].join('\n');
 }
 
 function renderFinalReport({ current, total, balance, runningTimeStr, status = '正常结束' }) {
-    const cBeans = current.gains?.beans || 0;
-    const cProfit = cBeans - current.cost;
-    const cRate = current.cost > 0 ? ((cProfit / current.cost) * 100).toFixed(1) : '0.0';
-    const swapped = swappedBeansTotal(current);
-
-    const prizeRows = Object.entries(current.prizes || {})
-        .filter(([, bucket]) => bucket.count > 0)
-        .sort((a, b) => b[1].count - a[1].count)
-        .flatMap(([type, bucket]) => {
-            const meta = PRIZE_META[type] || PRIZE_META.unknown;
-            const sums = [];
-            if (bucket.value > 0) sums.push(`${fmt(bucket.value)}${meta.unit ? ' ' + meta.unit : ''}`);
-            if (bucket.swappedBeans > 0) sums.push(`另折算 ${fmt(bucket.swappedBeans)} 憨豆`);
-
-            const head = `  ${meta.icon} ${meta.name} ${fmt(bucket.count)} 次${sums.length ? ` · ${sums.join(' · ')}` : ''}`;
-            const tiers = Object.entries(bucket.tiers)
-                .sort((a, b) => b[1] - a[1])
-                .map(([label, count]) => `      ${label} × ${count}`);
-            return [head, ...tiers];
-        });
-
     const lines = [
-        `🎡【HHCLUB 幸运大转盘 · 运行总报】`,
-        `━━━━━━━━━━━━━━━━━━━`,
-        `🛑 运行状态：${status}`,
-        `⏱️ 运行时长：${runningTimeStr}`,
-        `🎰 本次已抽：${fmt(current.draws)} 抽`,
-        `💰 憨豆收支：消耗 ${fmt(current.cost)} · 获得 ${fmt(cBeans)}${swapped > 0 ? `（含折算 ${fmt(swapped)}）` : ''}`,
-        `📈 本次盈亏：${cProfit >= 0 ? '+' : ''}${fmt(cProfit)}（${cProfit >= 0 ? '+' : ''}${cRate}%）`,
-        `💵 最终余额：${fmt(balance)} 憨豆`,
-        `━━━━━━━━━━━━━━━━━━━`,
-        `🎁 本次中奖明细：`,
-        ...(prizeRows.length > 0 ? prizeRows : ['  本次无中奖数据'])
+        `╭─ 🎯 任务结算`,
+        `│ 运行状态：${status}`,
+        `│ 运行时长：${runningTimeStr}`,
+        `│ 最终余额：${fmt(balance)} 憨豆`,
+        `╰─ 结束时间：${stamp()}`,
+        NOTICE_DIVIDER,
+        `🆕 本次运行增量`,
+        ...renderStatsOverview(current, { delta: true }),
+        NOTICE_DIVIDER,
+        `🎁 本次奖品明细`,
+        ...renderPrizeDetails(current, '本次无奖品记录'),
+        NOTICE_DIVIDER,
+        `🏆 历史累计总览（含本次）`,
+        ...renderStatsOverview(total),
+        NOTICE_DIVIDER,
+        `🗂️ 历史奖品明细`,
+        ...renderPrizeDetails(total, '暂无历史奖品记录')
     ];
-
-    if (CONFIG.statsFile && total && total.draws > current.draws) {
-        const tBeans = total.gains?.beans || 0;
-        const tProfit = tBeans - total.cost;
-        const tRate = total.cost > 0 ? ((tProfit / total.cost) * 100).toFixed(1) : '0.0';
-        lines.push(
-            `━━━━━━━━━━━━━━━━━━━`,
-            `📊 历史累计总计：`,
-            `  • 历史总抽数：${fmt(total.draws)} 抽`,
-            `  • 历史总消耗：${fmt(total.cost)} 憨豆`,
-            `  • 历史总收入：${fmt(tBeans)} 憨豆`,
-            `  • 历史总盈亏：${tProfit >= 0 ? '+' : ''}${fmt(tProfit)}（${tProfit >= 0 ? '+' : ''}${tRate}%）`
-        );
-    }
-
-    lines.push(`━━━━━━━━━━━━━━━━━━━`, `🕒 结束时间：${stamp()}`);
     return lines.join('\n');
 }
 
@@ -782,6 +765,7 @@ class Lottery {
         this.balance = 0;
         this.cost = 2000;
         this.stopReason = '';
+        this.interrupted = false;
 
         this.startedAt = Date.now();
         this.current = emptyStats();
@@ -941,6 +925,8 @@ class Lottery {
     }
 
     shouldContinue() {
+        if (this.interrupted) return false;
+
         if (this.deadline > 0 && Date.now() > this.deadline) {
             this.stopReason = `到达单次运行时间上限（${CONFIG.maxMinutes} 分钟）`;
             report(`⏰ ${this.stopReason}，收工`);
@@ -987,7 +973,7 @@ class Lottery {
             totalTimeStr
         });
 
-        await notify('📊【HHCLUB 幸运大转盘】运行简报', content);
+        await notify('📊 HHCLUB 幸运大转盘｜定时战报', content);
 
         this.period = emptyStats();
         this.periodStartTime = Date.now();
@@ -1106,7 +1092,7 @@ class Lottery {
                         vipSwappedBeans: vipSwapped
                     });
                     log(`🎉 命中大奖【${prize.label || prizeText.trim()}】，立即发送即时推送通知！`);
-                    await notify('🎉【HHCLUB 幸运大转盘】命中大奖通知！', bigPrizeNotice);
+                    await notify('🎉 HHCLUB 幸运大转盘｜命中大奖', bigPrizeNotice);
                 }
 
                 if (CONFIG.cleanMail && this.current.draws % RUNTIME.mailCleanEveryDraws === 0) {
@@ -1370,106 +1356,145 @@ async function sendTelegramDirect(title, content) {
     }
 }
 
-async function notify(title, content) {
+async function notify(title, content, { preferTelegram = false } = {}) {
     let sentCount = 0;
+    let telegramAttempted = false;
 
-    // 1. 尝试使用青龙通用 sendNotify.js 模块
-    let sender = null;
-    let foundPath = '';
-    const candidatePaths = [
-        path.join(__dirname, 'sendNotify.js'),
-        path.join(__dirname, 'sendNotify'),
-        path.join(__dirname, '../sendNotify.js'),
-        path.join(__dirname, '../sendNotify'),
-        path.join(__dirname, '../../sendNotify.js'),
-        path.join(process.cwd(), 'sendNotify.js'),
-        path.join(process.cwd(), 'sendNotify'),
-        path.join(process.cwd(), 'scripts/sendNotify.js'),
-        './sendNotify',
-        '../sendNotify',
-        '/ql/data/scripts/sendNotify.js',
-        '/ql/data/scripts/sendNotify',
-        '/ql/scripts/sendNotify.js',
-        '/ql/scripts/sendNotify',
-        '/ql/shell/sendNotify.js',
-        '/ql/shell/sendNotify'
-    ];
+    // 青龙内置 notify.js 默认会请求「一言」并在正文末尾追加随机标语。
+    // 这里仅在加载 / 调用通知模块时临时关闭，不修改用户的全局环境变量。
+    const hadHitokoto = Object.prototype.hasOwnProperty.call(process.env, 'HITOKOTO');
+    const originalHitokoto = process.env.HITOKOTO;
+    process.env.HITOKOTO = 'false';
 
-    for (const modulePath of candidatePaths) {
-        try {
-            sender = require(modulePath);
-            if (sender) {
-                foundPath = modulePath;
-                break;
-            }
-        } catch (error) {
-            // 继续尝试下一个候选路径
+    try {
+        // 手动停止时优先直连 Telegram：路径更短，避免青龙终止任务时
+        // sendNotify 加载多通道或外部文案请求拖延送达。直连失败仍会回落 sendNotify。
+        if (preferTelegram && (CONFIG.tgBotToken || process.env.TG_BOT_TOKEN)) {
+            telegramAttempted = true;
+            const tgOk = await sendTelegramDirect(title, content);
+            if (tgOk) sentCount++;
         }
-    }
 
-    if (sender) {
-        const send = sender.sendNotify || sender;
-        if (typeof send === 'function') {
-            try {
-                log(`📤 正在调用青龙通知模块（${foundPath}）发送推送...`);
-                await send(title, content);
-                sentCount++;
-            } catch (error) {
-                log(`⚠️ sendNotify 推送失败：${error?.message || error}`);
+        // 1. 尝试使用青龙通用 sendNotify.js 模块
+        let sender = null;
+        let foundPath = '';
+        const candidatePaths = [
+            path.join(__dirname, 'sendNotify.js'),
+            path.join(__dirname, 'sendNotify'),
+            path.join(__dirname, '../sendNotify.js'),
+            path.join(__dirname, '../sendNotify'),
+            path.join(__dirname, '../../sendNotify.js'),
+            path.join(process.cwd(), 'sendNotify.js'),
+            path.join(process.cwd(), 'sendNotify'),
+            path.join(process.cwd(), 'scripts/sendNotify.js'),
+            './sendNotify',
+            '../sendNotify',
+            '/ql/data/scripts/sendNotify.js',
+            '/ql/data/scripts/sendNotify',
+            '/ql/scripts/sendNotify.js',
+            '/ql/scripts/sendNotify',
+            '/ql/shell/sendNotify.js',
+            '/ql/shell/sendNotify'
+        ];
+
+        if (sentCount === 0) {
+            for (const modulePath of candidatePaths) {
+                try {
+                    sender = require(modulePath);
+                    if (sender) {
+                        foundPath = modulePath;
+                        break;
+                    }
+                } catch (error) {
+                    // 继续尝试下一个候选路径
+                }
             }
         }
-    }
 
-    // 2. sendNotify 未成功时才走 Telegram 直连兜底。
-    //    青龙 sendNotify 通常已经集成 Telegram，两边同时发会造成重复通知。
-    if (sentCount === 0 && (CONFIG.tgBotToken || process.env.TG_BOT_TOKEN)) {
-        const tgOk = await sendTelegramDirect(title, content);
-        if (tgOk) sentCount++;
-    } else if (sentCount === 0) {
-        log('ℹ️ 未检测到 TG_BOT_TOKEN 环境变量。如需 TG 推送，请在青龙「环境变量」添加 TG_BOT_TOKEN 与 TG_USER_ID');
-    }
+        if (sender) {
+            const send = sender.sendNotify || sender;
+            if (typeof send === 'function') {
+                try {
+                    log(`📤 正在调用青龙通知模块（${foundPath}）发送推送...`);
+                    await send(title, content);
+                    sentCount++;
+                } catch (error) {
+                    log(`⚠️ sendNotify 推送失败：${error?.message || error}`);
+                }
+            }
+        }
 
-    if (sentCount === 0) {
-        log('ℹ️ 未能成功触发任何通知渠道');
+        // 2. sendNotify 未成功时才走 Telegram 直连兜底。
+        //    青龙 sendNotify 通常已经集成 Telegram，两边同时发会造成重复通知。
+        if (sentCount === 0 && !telegramAttempted && (CONFIG.tgBotToken || process.env.TG_BOT_TOKEN)) {
+            telegramAttempted = true;
+            const tgOk = await sendTelegramDirect(title, content);
+            if (tgOk) sentCount++;
+        } else if (sentCount === 0 && !telegramAttempted) {
+            log('ℹ️ 未检测到 TG_BOT_TOKEN 环境变量。如需 TG 推送，请在青龙「环境变量」添加 TG_BOT_TOKEN 与 TG_USER_ID');
+        }
+
+        if (sentCount === 0) {
+            log('ℹ️ 未能成功触发任何通知渠道');
+        }
+        return sentCount > 0;
+    } finally {
+        if (hadHitokoto) process.env.HITOKOTO = originalHitokoto;
+        else delete process.env.HITOKOTO;
     }
 }
 
 /* 监听退出信号，保存已抽数据并发送停止通知 */
 function guardExit(lottery) {
-    let bailing = false;
+    let stoppingPromise = null;
 
-    const handleExit = async (signal) => {
-        if (bailing) return;
-        bailing = true;
+    const handleExit = signal => {
+        if (stoppingPromise) return stoppingPromise;
 
-        log(`\n⚠️ 收到 ${signal} 停止信号，保存数据并发送通知...`);
-        if (lottery.current.draws > 0 && CONFIG.statsFile) {
-            const file = saveStats(lottery.current, lottery.total);
-            if (file) log(`💾 统计已安全存到 ${file}`);
-        }
-        raw(`\n${'─'.repeat(40)}\n${lottery.summary()}`);
+        stoppingPromise = (async () => {
+            lottery.interrupted = true;
+            lottery.stopReason = `收到 ${signal} 停止信号（手动停止）`;
+            log(`\n⚠️ ${lottery.stopReason}，保存数据并发送通知...`);
+            if (lottery.current.draws > 0 && CONFIG.statsFile) {
+                const file = saveStats(lottery.current, lottery.total);
+                if (file) log(`💾 统计已安全存到 ${file}`);
+            }
+            raw(`\n${'─'.repeat(40)}\n${lottery.summary()}`);
 
-        const runningTime = formatDuration(Date.now() - lottery.startedAt);
-        const finalReport = renderFinalReport({
-            current: lottery.current,
-            total: lottery.total,
-            balance: lottery.balance,
-            runningTimeStr: runningTime,
-            status: `收到 ${signal} 停止信号（手动停止）`
-        });
+            const runningTime = formatDuration(Date.now() - lottery.startedAt);
+            const finalReport = renderFinalReport({
+                current: lottery.current,
+                total: lottery.total,
+                balance: lottery.balance,
+                runningTimeStr: runningTime,
+                status: lottery.stopReason
+            });
 
-        try {
-            await notify('🛑【HHCLUB 幸运大转盘】任务停止', finalReport);
-        } catch (err) {
-            // ignore
-        }
+            // 给青龙的手动停止留出发送窗口；通知完成后主动退出。
+            const watchdog = setTimeout(() => {
+                log('⚠️ 停止通知等待超时，已保存数据并退出');
+                process.exit(0);
+            }, 35000);
 
-        process.exit(0);
+            try {
+                const sent = await notify('🛑 HHCLUB 幸运大转盘｜手动停止', finalReport, { preferTelegram: true });
+                log(sent ? '✅ 手动停止通知已发送' : '⚠️ 手动停止通知未能送达');
+            } catch (error) {
+                log(`⚠️ 手动停止通知发送异常：${error?.message || error}`);
+            } finally {
+                clearTimeout(watchdog);
+            }
+
+            process.exit(0);
+        })();
+
+        return stoppingPromise;
     };
 
-    process.on('SIGINT', () => { handleExit('SIGINT'); });
-    process.on('SIGTERM', () => { handleExit('SIGTERM'); });
-    process.on('SIGHUP', () => { handleExit('SIGHUP'); });
+    process.once('SIGINT', () => { handleExit('SIGINT'); });
+    process.once('SIGTERM', () => { handleExit('SIGTERM'); });
+    process.once('SIGHUP', () => { handleExit('SIGHUP'); });
+    return handleExit;
 }
 
 async function main() {
@@ -1559,7 +1584,7 @@ async function main() {
         status: lottery.stopReason || (lottery.current.draws >= CONFIG.draws ? `已达到设定抽奖次数（${fmt(lottery.current.draws)} 抽）` : '正常结束')
     });
 
-    await notify('🎡【HHCLUB 幸运大转盘】运行总报', finalReport);
+    await notify('🎡 HHCLUB 幸运大转盘｜运行总报', finalReport);
 
     const summary = lottery.summary();
     raw(`\n${'─'.repeat(40)}\n${summary}`);

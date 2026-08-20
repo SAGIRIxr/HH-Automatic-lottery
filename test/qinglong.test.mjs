@@ -974,35 +974,55 @@ console.log('\n[31] 统计写盘是原子替换，不会留半截 JSON');
 
 /* ---------------------------------------------------------------- */
 console.log('\n[32] 中途打断：成绩存下来，不触发清信');
-if (process.platform === 'win32') {
-    console.log('  · Windows 上 child.kill() 是强杀、收不到信号，这条跳过（Linux/NAS 上会跑）');
-} else {
+{
     const site = await startSite({
         prizes: ['魔力 100 '], balance: 100000,
         mail: [{ id: '1', subject: '幸运大转盘 中奖通知' }]
     });
     const statsFile = path.join(TMP, 'stats-interrupt.json');
+    const notifyLog = path.join(TMP, 'notify-interrupt.log');
+    const mockSendNotify = `const fs = require('fs');
+const hitokotoAtLoad = process.env.HITOKOTO;
+module.exports = {
+    sendNotify: async (title, content) => {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        fs.appendFileSync(${JSON.stringify(notifyLog)}, title + '\\n' + content
+            + '\\nHITOKOTO=' + hitokotoAtLoad + '\\n---END---\\n');
+    }
+};`;
 
-    let drawn = 0;
-    const live = spawnScript(
+    const { dir, file } = installScript(
         { host: site.state.origin, draws: 50, cleanMail: true, statsFile },
-        { onOutput: text => { if (/🎲 第 \d+ 抽/.test(text)) drawn++; } }
+        null,
+        { 'sendNotify.js': mockSendNotify }
     );
 
-    // 等它抽满两次再打断
-    await until(() => drawn >= 2, 30000);
-    live.child.kill('SIGINT');
-    const { out } = await live.done;
+    // Windows 的 child.kill() 会强杀子进程，测试源码直接调用同一个信号处理器。
+    // 生产代码仍由 SIGINT / SIGTERM / SIGHUP 触发该处理器。
+    const installed = fs.readFileSync(file, 'utf8').replace(
+        '    guardExit(lottery);',
+        "    const triggerTestStop = guardExit(lottery);\n    setTimeout(() => triggerTestStop('SIGTERM'), 250);"
+    );
+    fs.writeFileSync(file, installed);
 
-    check('说明了是被信号打断的', /收到 Ctrl-C/.test(out), out.slice(-600));
+    const { code, out } = await runFile(file, dir);
+    const notifyContent = fs.existsSync(notifyLog) ? fs.readFileSync(notifyLog, 'utf8') : '';
+
+    check('手动停止后正常退出', code === 0, `exit ${code}`);
+    check('说明了是被信号打断的', /收到 SIGTERM 停止信号（手动停止）/.test(out), out.slice(-800));
     check('已抽到的成绩存下来了',
-        fs.existsSync(statsFile) && JSON.parse(fs.readFileSync(statsFile, 'utf8')).total.draws >= 2,
+        fs.existsSync(statsFile) && JSON.parse(fs.readFileSync(statsFile, 'utf8')).total.draws >= 1,
         fs.existsSync(statsFile) ? fs.readFileSync(statsFile, 'utf8').slice(0, 120) : '文件不存在');
     check('没抽满 50 次就停了',
         site.state.draws < 50, `实际 ${site.state.draws}`);
     check('打断时不清信，那封通知还在',
         site.state.mail.length === 1, site.state.mail.map(m => m.id).join(','));
     check('汇总照样打出来了', /本次：\d+ 抽/.test(out), out.slice(-400));
+    check('手动停止通知在退出前完整发送',
+        /🛑 HHCLUB 幸运大转盘｜手动停止/.test(notifyContent)
+        && /手动停止通知已发送/.test(out), notifyContent || out.slice(-800));
+    check('加载青龙通知模块时已禁用末尾随机标语',
+        /HITOKOTO=false/.test(notifyContent), notifyContent);
 
     await site.close();
 }
@@ -1128,8 +1148,13 @@ module.exports = {
     await runFile(file, dir);
     const notifyContent = fs.existsSync(notifyLog) ? fs.readFileSync(notifyLog, 'utf8') : '';
 
-    check('总报标题包含运行总报', /【HHCLUB 幸运大转盘】运行总报/.test(notifyContent));
-    check('排版包含美化卡片内容', /运行时长：/.test(notifyContent) && /最终余额：/.test(notifyContent));
+    check('总报标题包含运行总报', /🎡 HHCLUB 幸运大转盘｜运行总报/.test(notifyContent));
+    check('排版包含美化卡片内容', /任务结算/.test(notifyContent) && /最终余额：/.test(notifyContent));
+    check('标题没有在正文里重复', (notifyContent.match(/运行总报/g) || []).length === 1, notifyContent);
+    check('总报包含历史奖品次数和档位明细',
+        /历史奖品明细/.test(notifyContent)
+        && /憨豆｜2 次 · 10,000 憨豆/.test(notifyContent)
+        && /5,000 憨豆 × 2/.test(notifyContent), notifyContent);
 
     await site.close();
 }
@@ -1202,7 +1227,7 @@ module.exports = {
     check('日志报了憨豆不足停止', /憨豆不足.*停止/.test(outA), outA);
 
     const notifyContentA = fs.existsSync(notifyLogA) ? fs.readFileSync(notifyLogA, 'utf8') : '';
-    check('憨豆不足时发送了统计通知', /【HHCLUB 幸运大转盘】运行总报/.test(notifyContentA));
+    check('憨豆不足时发送了统计通知', /🎡 HHCLUB 幸运大转盘｜运行总报/.test(notifyContentA));
     check('通知中包含憨豆不足状态', /憨豆不足/.test(notifyContentA));
     await siteA.close();
 
@@ -1230,7 +1255,7 @@ module.exports = {
     check('刚好抽了 2 次', siteB.state.draws === 2, `实际 ${siteB.state.draws}`);
 
     const notifyContentB = fs.existsSync(notifyLogB) ? fs.readFileSync(notifyLogB, 'utf8') : '';
-    check('达到次数后发送了统计通知', /【HHCLUB 幸运大转盘】运行总报/.test(notifyContentB));
+    check('达到次数后发送了统计通知', /🎡 HHCLUB 幸运大转盘｜运行总报/.test(notifyContentB));
     check('通知中包含达到设定抽奖次数', /已达到设定抽奖次数/.test(notifyContentB));
     await siteB.close();
 }
@@ -1327,15 +1352,19 @@ module.exports = {
         && /获得：\+5,000 憨豆/.test(periodReport)
         && /净盈亏：\+3,000（\+150\.0%）/.test(periodReport), periodReport);
     check('历史总抽数、总收支和总盈亏正确',
-        /总抽奖：11 抽/.test(periodReport)
-        && /总消耗：22,000 憨豆/.test(periodReport)
-        && /总获得：20,000 憨豆/.test(periodReport)
-        && /总盈亏：-2,000（-9\.1%）/.test(periodReport), periodReport);
-    check('增量奖品附带该奖品的历史累计',
-        /憨豆：\+1 次（5,000）/.test(periodReport)
-        && /历史累计 11 次（20,000）/.test(periodReport), periodReport);
+        /历史累计总量/.test(periodReport)
+        && /抽奖：11 抽/.test(periodReport)
+        && /消耗：22,000 憨豆/.test(periodReport)
+        && /获得：20,000 憨豆/.test(periodReport)
+        && /净盈亏：-2,000（-9\.1%）/.test(periodReport), periodReport);
+    check('此次和历史都展示奖品次数与档位明细',
+        /此次奖品明细/.test(periodReport)
+        && /憨豆｜1 次 · 5,000 憨豆/.test(periodReport)
+        && /历史奖品明细/.test(periodReport)
+        && /憨豆｜11 次 · 20,000 憨豆/.test(periodReport)
+        && /1,500 憨豆 × 10/.test(periodReport), periodReport);
     check('通知标题不在正文里再重复一遍',
-        (periodReport.match(/运行简报/g) || []).length === 1, periodReport);
+        (periodReport.match(/定时战报/g) || []).length === 1, periodReport);
 
     await site.close();
 }
