@@ -10,6 +10,7 @@
  *   - 🎉 大奖即时推送：命中 邀请、VIP（或折算憨豆）、78w+ 憨豆等大奖即时推送
  *   - 📊 周期统计简报：每隔 1 小时（或自定义频率）推送运行简报卡片
  *   - 💾 统计实时落盘与导入导出：每抽一注立刻实时安全落盘，支持导入历史备份
+ *   - 📱 双重推送保障：支持青龙 sendNotify 及原生 Telegram Bot 直连推送
  *   - 📪 站内信清理：抽奖同时自动清理系统抽奖通知信，不误删重要邮件
  *
  * 命令行指令：
@@ -83,14 +84,19 @@ const CONFIG = {
     /* ⑬ 要导入的历史备份 JSON 文件路径（可选，也可通过 CLI: node hh_lottery.js --import <file> 导入） */
     importFile: '',
 
-    /* ⑭ 日志时间按哪个时区显示。
+    /* ⑭ Telegram 推送配置（可选，也可在青龙环境变量配置 TG_BOT_TOKEN 与 TG_USER_ID） */
+    tgBotToken: '',
+    tgUserId: '',
+    tgApiHost: '',
+
+    /* ⑮ 日志时间按哪个时区显示。
           青龙容器默认常是 UTC，不设这个的话日志时间对不上 */
     timezone: 'Asia/Shanghai',
 
-    /* ⑮ 站点域名，一般不用改 */
+    /* ⑯ 站点域名，一般不用改 */
     host: 'hhanclub.net',
 
-    /* ⑯ User-Agent，一般不用改 */
+    /* ⑰ User-Agent，一般不用改 */
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
         + '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
 };
@@ -141,6 +147,9 @@ function loadEnvConfig() {
     if (env.HH_CLEAN_MAIL !== undefined) CONFIG.cleanMail = env.HH_CLEAN_MAIL === 'true' || env.HH_CLEAN_MAIL === '1';
     if (env.HH_STATS_FILE !== undefined) CONFIG.statsFile = env.HH_STATS_FILE;
     if (env.HH_IMPORT_FILE !== undefined) CONFIG.importFile = env.HH_IMPORT_FILE;
+    if (env.TG_BOT_TOKEN) CONFIG.tgBotToken = env.TG_BOT_TOKEN;
+    if (env.TG_USER_ID) CONFIG.tgUserId = env.TG_USER_ID;
+    if (env.TG_API_HOST) CONFIG.tgApiHost = env.TG_API_HOST;
     if (env.HH_TIMEZONE !== undefined) CONFIG.timezone = env.HH_TIMEZONE;
     if (env.HH_HOST !== undefined) CONFIG.host = env.HH_HOST;
 }
@@ -165,6 +174,9 @@ function normalizeConfig() {
     CONFIG.host = String(CONFIG.host || 'hhanclub.net').trim().replace(/\/+$/, '');
     CONFIG.statsFile = String(CONFIG.statsFile || '').trim();
     CONFIG.importFile = String(CONFIG.importFile || '').trim();
+    CONFIG.tgBotToken = String(CONFIG.tgBotToken || '').trim();
+    CONFIG.tgUserId = String(CONFIG.tgUserId || '').trim();
+    CONFIG.tgApiHost = String(CONFIG.tgApiHost || '').trim();
     CONFIG.timezone = String(CONFIG.timezone || '').trim();
 }
 
@@ -1297,19 +1309,24 @@ class Lottery {
    入口与通知
 ========================================================= */
 
-/* 原生直连 Telegram Bot 推送（兜底保障） */
+/* 原生直连 Telegram Bot 推送（强保障，独立可靠） */
 async function sendTelegramDirect(title, content) {
-    const token = process.env.TG_BOT_TOKEN;
-    const chatId = process.env.TG_USER_ID;
+    const token = CONFIG.tgBotToken || process.env.TG_BOT_TOKEN;
+    const chatId = CONFIG.tgUserId || process.env.TG_USER_ID;
     if (!token || !chatId) return false;
 
-    const host = process.env.TG_API_HOST || 'api.telegram.org';
-    const proxyHost = process.env.TG_PROXY_HOST;
-    const proxyPort = process.env.TG_PROXY_PORT;
+    const host = (CONFIG.tgApiHost || process.env.TG_API_HOST || 'api.telegram.org')
+        .replace(/^https?:\/\//, '')
+        .replace(/\/+$/, '');
+    const url = `https://${host}/bot${token}/sendMessage`;
+    const text = `${title}\n\n${content}`;
+
+    log(`🚀 [Telegram 直连] 正在向 https://${host}/bot${token.slice(0, 6)}... 推送 (chat_id: ${chatId})...`);
 
     try {
-        const url = `https://${host}/bot${token}/sendMessage`;
-        const text = `${title}\n\n${content}`;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 12000);
+
         const response = await fetch(url, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
@@ -1317,24 +1334,32 @@ async function sendTelegramDirect(title, content) {
                 chat_id: chatId,
                 text,
                 disable_web_page_preview: true
-            })
+            }),
+            signal: controller.signal
         });
+        clearTimeout(timer);
 
-        const data = await response.json().catch(() => ({}));
-        if (data.ok) {
-            log(`✅ Telegram 原生通知推送成功`);
+        const textResp = await response.text();
+        let data;
+        try { data = JSON.parse(textResp); } catch (e) { data = { raw: textResp }; }
+
+        if (response.ok && data.ok) {
+            log(`✅ [Telegram 直连] 消息已成功送达 Telegram！`);
             return true;
         } else {
-            log(`⚠️ Telegram 原生推送返回失败：${JSON.stringify(data)}`);
+            log(`❌ [Telegram 直连] Telegram 接口返回错误 (HTTP ${response.status})：${textResp}`);
             return false;
         }
     } catch (error) {
-        log(`⚠️ Telegram 直连推送失败：${error?.message || error}`);
+        log(`❌ [Telegram 直连] 推送失败（若为国内服务器请配置 TG_API_HOST 反代）：${error?.message || error}`);
         return false;
     }
 }
 
 async function notify(title, content) {
+    let sentCount = 0;
+
+    // 1. 尝试使用青龙通用 sendNotify.js 模块
     let sender = null;
     let foundPath = '';
     const candidatePaths = [
@@ -1374,22 +1399,24 @@ async function notify(title, content) {
             try {
                 log(`📤 正在调用青龙通知模块（${foundPath}）发送推送...`);
                 await send(title, content);
-                log(`✅ 推送通知调用完成`);
-                return;
+                sentCount++;
             } catch (error) {
                 log(`⚠️ sendNotify 推送失败：${error?.message || error}`);
             }
         }
     }
 
-    // 若 sendNotify 模块未找到或调用失败，尝试使用青龙环境变量原生直连 Telegram
-    if (process.env.TG_BOT_TOKEN && process.env.TG_USER_ID) {
-        log(`📤 检测到 TG 环境变量，正在尝试 Telegram 原生直连推送...`);
-        const sent = await sendTelegramDirect(title, content);
-        if (sent) return;
+    // 2. 原生 Telegram 直连推送（强保障，独立于 sendNotify.js）
+    if (CONFIG.tgBotToken || process.env.TG_BOT_TOKEN) {
+        const tgOk = await sendTelegramDirect(title, content);
+        if (tgOk) sentCount++;
+    } else {
+        log('ℹ️ 未检测到 TG_BOT_TOKEN 环境变量。如需 TG 推送，请在青龙「环境变量」添加 TG_BOT_TOKEN 与 TG_USER_ID');
     }
 
-    log('ℹ️ 未能成功触发通知（如需推送，请确认青龙面板「系统设置 → 通知设置」已配置，且 scripts 目录下存在 sendNotify.js）');
+    if (sentCount === 0 && !sender) {
+        log('ℹ️ 未能成功触发任何通知渠道');
+    }
 }
 
 /* 监听退出信号，保存已抽数据并发送停止通知 */
