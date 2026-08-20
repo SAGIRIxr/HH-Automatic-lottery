@@ -1326,7 +1326,7 @@ async function sendTelegramDirect(title, content) {
 
     try {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 12000);
+        const timer = setTimeout(() => controller.abort(), 5000);
 
         const response = await fetch(url, {
             method: 'POST',
@@ -1518,6 +1518,7 @@ function guardExit(lottery) {
             // 优先交给脱离青龙任务进程组的独立发送器，不再赌青龙会给异步网络请求留时间。
             if (spawnDetachedNotification('🛑 HHCLUB 幸运大转盘｜手动停止', finalReport)) {
                 log('📨 手动停止通知已交给独立发送器');
+                await sleep(150);
                 process.exit(0);
                 return;
             }
@@ -1568,6 +1569,11 @@ async function main() {
 
     const args = process.argv.slice(2);
     if (args.includes(DETACHED_NOTIFY_ARG)) {
+        // 屏蔽所有退出/挂起信号，防止被青龙任务结束时的进程组清理连带杀死
+        ['SIGINT', 'SIGTERM', 'SIGHUP'].forEach(sig => {
+            try { process.on(sig, () => {}); } catch (e) {}
+        });
+
         loadEnvConfig();
         loadExternalConfig();
         normalizeConfig();
