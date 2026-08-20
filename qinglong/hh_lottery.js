@@ -961,7 +961,6 @@ class Lottery {
             totalTimeStr
         });
 
-        log(`📢 触发定期统计简报（近 ${durationMinutes} 分钟共 ${this.period.draws} 抽）`);
         await notify('📊【HHCLUB 幸运大转盘】运行简报', content);
 
         this.period = emptyStats();
@@ -1298,38 +1297,99 @@ class Lottery {
    入口与通知
 ========================================================= */
 
+/* 原生直连 Telegram Bot 推送（兜底保障） */
+async function sendTelegramDirect(title, content) {
+    const token = process.env.TG_BOT_TOKEN;
+    const chatId = process.env.TG_USER_ID;
+    if (!token || !chatId) return false;
+
+    const host = process.env.TG_API_HOST || 'api.telegram.org';
+    const proxyHost = process.env.TG_PROXY_HOST;
+    const proxyPort = process.env.TG_PROXY_PORT;
+
+    try {
+        const url = `https://${host}/bot${token}/sendMessage`;
+        const text = `${title}\n\n${content}`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                chat_id: chatId,
+                text,
+                disable_web_page_preview: true
+            })
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (data.ok) {
+            log(`✅ Telegram 原生通知推送成功`);
+            return true;
+        } else {
+            log(`⚠️ Telegram 原生推送返回失败：${JSON.stringify(data)}`);
+            return false;
+        }
+    } catch (error) {
+        log(`⚠️ Telegram 直连推送失败：${error?.message || error}`);
+        return false;
+    }
+}
+
 async function notify(title, content) {
     let sender = null;
+    let foundPath = '';
     const candidatePaths = [
+        path.join(__dirname, 'sendNotify.js'),
         path.join(__dirname, 'sendNotify'),
+        path.join(__dirname, '../sendNotify.js'),
         path.join(__dirname, '../sendNotify'),
+        path.join(__dirname, '../../sendNotify.js'),
+        path.join(process.cwd(), 'sendNotify.js'),
         path.join(process.cwd(), 'sendNotify'),
+        path.join(process.cwd(), 'scripts/sendNotify.js'),
         './sendNotify',
         '../sendNotify',
-        '/ql/data/scripts/sendNotify',
         '/ql/data/scripts/sendNotify.js',
+        '/ql/data/scripts/sendNotify',
+        '/ql/scripts/sendNotify.js',
         '/ql/scripts/sendNotify',
-        '/ql/scripts/sendNotify.js'
+        '/ql/shell/sendNotify.js',
+        '/ql/shell/sendNotify'
     ];
 
     for (const modulePath of candidatePaths) {
         try {
             sender = require(modulePath);
-            if (sender) break;
+            if (sender) {
+                foundPath = modulePath;
+                break;
+            }
         } catch (error) {
-            // 没装通知模块就算了，日志里一样看得到
+            // 继续尝试下一个候选路径
         }
     }
-    if (!sender) return;
 
-    const send = sender.sendNotify || sender;
-    if (typeof send === 'function') {
-        try {
-            await send(title, content);
-        } catch (error) {
-            log(`⚠️ 通知发送失败：${error?.message || error}`);
+    if (sender) {
+        const send = sender.sendNotify || sender;
+        if (typeof send === 'function') {
+            try {
+                log(`📤 正在调用青龙通知模块（${foundPath}）发送推送...`);
+                await send(title, content);
+                log(`✅ 推送通知调用完成`);
+                return;
+            } catch (error) {
+                log(`⚠️ sendNotify 推送失败：${error?.message || error}`);
+            }
         }
     }
+
+    // 若 sendNotify 模块未找到或调用失败，尝试使用青龙环境变量原生直连 Telegram
+    if (process.env.TG_BOT_TOKEN && process.env.TG_USER_ID) {
+        log(`📤 检测到 TG 环境变量，正在尝试 Telegram 原生直连推送...`);
+        const sent = await sendTelegramDirect(title, content);
+        if (sent) return;
+    }
+
+    log('ℹ️ 未能成功触发通知（如需推送，请确认青龙面板「系统设置 → 通知设置」已配置，且 scripts 目录下存在 sendNotify.js）');
 }
 
 /* 监听退出信号，保存已抽数据并发送停止通知 */
