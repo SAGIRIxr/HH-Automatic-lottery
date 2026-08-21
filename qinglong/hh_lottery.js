@@ -470,6 +470,8 @@ function normalizeStats(data) {
     });
 
     stats.raw = { ...(data.raw || {}) };
+    // 导入记录要留着，不然下次读回来又会把同一份备份再导一遍
+    if (Array.isArray(data.importedFrom)) stats.importedFrom = [...data.importedFrom];
     return stats;
 }
 
@@ -510,7 +512,22 @@ function mergeStats(target, source) {
     return target;
 }
 
-function importStatsFile(importFilePath) {
+/* 同一份备份只认一次。
+
+   importFile 是写在配置里的，配置又是每次运行都读 —— 不记账的话
+   每跑一次就把同一份历史再合并一遍，几天下来抽数、消耗、盈亏全是
+   翻倍的，而且看不出哪儿错了。
+   按「绝对路径 + 文件大小 + mtime」记指纹，换了新备份照样能导。 */
+function importFingerprint(absPath) {
+    try {
+        const info = fs.statSync(absPath);
+        return `${absPath}|${info.size}|${Math.round(info.mtimeMs)}`;
+    } catch (error) {
+        return absPath;
+    }
+}
+
+function importStatsFile(importFilePath, { force = false } = {}) {
     const absPath = path.isAbsolute(importFilePath) ? importFilePath : path.join(process.cwd(), importFilePath);
     if (!fs.existsSync(absPath)) {
         log(`❌ 导入文件不存在：${absPath}`);
@@ -526,9 +543,19 @@ function importStatsFile(importFilePath) {
     }
 
     const currentTotal = loadTotal();
+    const fingerprint = importFingerprint(absPath);
+    const done = Array.isArray(currentTotal.importedFrom) ? currentTotal.importedFrom : [];
+
+    if (!force && done.includes(fingerprint)) {
+        log(`ℹ️ 这份备份之前已经导过了，跳过：${absPath}`);
+        log('   想再导一次的话用命令行：node hh_lottery.js --import <file>');
+        return true;
+    }
+
     const beforeDraws = currentTotal.draws;
     mergeStats(currentTotal, payload);
     const addedDraws = currentTotal.draws - beforeDraws;
+    currentTotal.importedFrom = [...done, fingerprint];
 
     const savedFile = saveStats(emptyStats(), currentTotal);
     log(`📥 成功导入历史记录文件：${absPath}`);
@@ -1334,7 +1361,8 @@ async function sendTelegramDirect(title, content) {
     const url = `https://${host}/bot${token}/sendMessage`;
     const text = `${title}\n\n${content}`;
 
-    log(`🚀 [Telegram 直连] 正在向 https://${host}/bot${token.slice(0, 6)}... 推送 (chat_id: ${chatId})...`);
+    // 日志经常被贴到群里求助，别把 token 片段和 chat_id 带出去
+    log(`🚀 [Telegram 直连] 正在向 ${host} 推送...`);
 
     try {
         const controller = new AbortController();
@@ -1527,17 +1555,19 @@ async function main() {
         process.exit(1);
     }
 
-    const args = process.argv.slice(2);
-    const importIdx = args.findIndex(arg => arg === '--import' || arg === '-i' || arg === 'import');
-    if (importIdx >= 0 && args[importIdx + 1]) {
-        const targetFile = args[importIdx + 1];
-        const ok = importStatsFile(targetFile);
-        process.exit(ok ? 0 : 1);
-    }
-
+    // 配置必须先加载：importStatsFile 要按 CONFIG.statsFile 读写，
+    // 放在这之前的话拿到的是脚本内置默认值，
+    // hh_lottery.config.json 里改过 statsFile 就会导到另一个文件去。
     loadEnvConfig();
     const configFile = loadExternalConfig();
     normalizeConfig();
+
+    const args = process.argv.slice(2);
+    const importIdx = args.findIndex(arg => arg === '--import' || arg === '-i' || arg === 'import');
+    if (importIdx >= 0 && args[importIdx + 1]) {
+        const ok = importStatsFile(args[importIdx + 1], { force: true });
+        process.exit(ok ? 0 : 1);
+    }
 
     if (CONFIG.importFile) {
         importStatsFile(CONFIG.importFile);
