@@ -67,8 +67,11 @@
 | `HH_INTERVAL` | `8` | 每抽间隔（秒，建议保持 8 秒以上防风控） |
 | `HH_MAX_MINUTES` | `0` | 单次运行时间上限（分钟，持续挂机建议设为 `0` 不限时） |
 | `HH_REPORT_INTERVAL` | `60` | 定期推送战报间隔（分钟，`60` = 1小时） |
-| `HH_NOTIFY_BIG_PRIZE` | `true` | 抽中大奖时是否立即推送通知 |
-| `HH_BIG_PRIZE_MIN` | `780000` | 触发大奖推送的憨豆门槛（默认 78w） |
+| `HH_NOTIFY_BIG_PRIZE` | `true` | 抽中自定义大奖时是否立即推送通知 |
+| `HH_BIG_PRIZE_TYPES` | `invite,vip,beans,rainbow` | 自定义哪些奖品属于大奖（支持 `invite,vip,beans,rainbow,upload,makeup,rename,all`，也支持中文） |
+| `HH_BIG_PRIZE_MIN` | `780000` | 触发大奖推送的憨豆门槛（默认 78w，当包含憨豆奖项时生效） |
+| `HH_BIG_PRIZE_MIN_UPLOAD` | `0` | 触发大奖推送的上传量门槛（GB，默认 0 表示任意上传量都推） |
+| `HH_BIG_PRIZE_KEYWORDS` | `特等,专属` | 自定义大奖关键词（只要中奖文案包含此关键词立即推送通知） |
 | `HH_CLEAN_MAIL` | `true` | 是否自动清理抽奖产生的系统站内信 |
 
 ---
@@ -113,7 +116,11 @@ pm2 start hh_lottery.js --name hh-lottery
     "maxMinutes": 0,
     "sleepOnLowMinutes": 10,
     "notifyBigPrize": true,
+    "bigPrizeTypes": ["invite", "vip", "beans"],
     "bigPrizeMinBeans": 780000,
+    "bigPrizeMinUpload": 0,
+    "bigPrizeMinRainbow": 0,
+    "bigPrizeKeywords": "",
     "reportIntervalMinutes": 60,
     "cleanMail": true,
     "statsFile": "hh_lottery_stats.json",
@@ -133,8 +140,12 @@ pm2 start hh_lottery.js --name hh-lottery
 | `interval` | `8` | `HH_INTERVAL` | 单抽间隔（秒，建议不低于 5 秒防风控） |
 | `maxMinutes` | `60` | `HH_MAX_MINUTES` | 单次运行最长时间（分钟）。**持续挂机建议设为 `0`（不限时长）** |
 | `sleepOnLowMinutes` | `10` | `HH_SLEEP_ON_LOW` | 持续模式下，余额不足时的休眠检查间隔（分钟） |
-| `notifyBigPrize` | `true` | `HH_NOTIFY_BIG_PRIZE`| 抽中大奖（邀请 / VIP / 78w 憨豆）时立即推送通知 |
+| `notifyBigPrize` | `true` | `HH_NOTIFY_BIG_PRIZE`| 命中自定义大奖时立即推送通知 |
+| `bigPrizeTypes` | `["invite","vip","beans"]` | `HH_BIG_PRIZE_TYPES` | 自定义大奖类型（可选 `invite,vip,beans,rainbow,upload,makeup,rename,all`） |
 | `bigPrizeMinBeans` | `780000` | `HH_BIG_PRIZE_MIN` | 触发大奖推送的憨豆数门槛（默认 780,000） |
+| `bigPrizeMinUpload` | `0` | `HH_BIG_PRIZE_MIN_UPLOAD` | 触发大奖推送的上传量门槛（GB，默认 0 表示任意上传量都推） |
+| `bigPrizeMinRainbow` | `0` | `HH_BIG_PRIZE_MIN_RAINBOW` | 触发大奖推送的彩虹ID天数门槛（天，默认 0 表示任意天数都推） |
+| `bigPrizeKeywords` | `""` | `HH_BIG_PRIZE_KEYWORDS` | 自定义大奖关键词（多个用逗号隔开，匹配文案即推大奖通知） |
 | `reportIntervalMinutes`| `60` | `HH_REPORT_INTERVAL` | 运行中每隔多少分钟推送一次统计简报（`0` 表示不发周期简报） |
 | `cleanMail` | `false` | `HH_CLEAN_MAIL` | 抽奖过程中与结束时自动清理抽奖站内信 |
 | `statsFile` | `hh_lottery_stats.json` | `HH_STATS_FILE` | 历史统计持久化文件名（留空 `""` 表示不存盘） |

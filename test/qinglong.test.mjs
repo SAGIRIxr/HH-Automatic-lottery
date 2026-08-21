@@ -1378,6 +1378,48 @@ module.exports = {
 }
 
 /* ---------------------------------------------------------------- */
+console.log('\n[42] 自定义大奖类别、阈值与关键词推送');
+{
+    const site = await startSite({
+        prizes: ['彩虹ID 7 天', '上传 5 GB', '魔力 100 ', '特等奖 纪念品'],
+        balance: 1000000
+    });
+
+    const notifyLog = path.join(TMP, 'notify-custom-big-prizes.log');
+    const mockSendNotify = `const fs = require('fs');
+module.exports = {
+    sendNotify: async (title, content) => {
+        fs.appendFileSync(${JSON.stringify(notifyLog)}, title + '\\n' + content + '\\n---END---\\n');
+    }
+};`;
+
+    // 配置只推送：彩虹ID、上传量，以及包含关键词 '特等奖' 的奖品
+    const { dir, file } = installScript(
+        {
+            host: site.state.origin,
+            draws: 4,
+            notifyBigPrize: true,
+            bigPrizeTypes: ['rainbow', 'upload'],
+            bigPrizeKeywords: '特等奖'
+        },
+        null,
+        { 'sendNotify.js': mockSendNotify }
+    );
+
+    const { out, code } = await runFile(file, dir);
+    const notifications = fs.existsSync(notifyLog) ? fs.readFileSync(notifyLog, 'utf8').split('---END---').filter(Boolean) : [];
+
+    check('正常退出', code === 0, `exit ${code}`);
+    check('日志报了 3 次大奖命中（彩虹ID、上传量、特等奖关键词）', (out.match(/命中大奖/g) || []).length === 3, out.slice(-800));
+    check('彩虹ID大奖推了通知', notifications.some(n => /彩虹ID/.test(n)), notifications.join('\n'));
+    check('上传量大奖推了通知', notifications.some(n => /上传量/.test(n)), notifications.join('\n'));
+    check('特等奖关键词大奖推了通知', notifications.some(n => /特等奖/.test(n)), notifications.join('\n'));
+    check('普通 100 憨豆未触发大奖通知', !notifications.some(n => /命中大奖：.*100 憨豆/.test(n)), notifications.join('\n'));
+
+    await site.close();
+}
+
+/* ---------------------------------------------------------------- */
 fs.rmSync(TMP, { recursive: true, force: true });
 
 console.log(`\n=========== ${passed} passed, ${failed} failed ===========\n`);
