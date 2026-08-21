@@ -1378,14 +1378,14 @@ module.exports = {
 }
 
 /* ---------------------------------------------------------------- */
-console.log('\n[42] 自定义大奖类别、阈值与关键词推送');
+console.log('\n[42] 可选抽到邀请不作为大奖通知 (notifyInvite: false)');
 {
     const site = await startSite({
-        prizes: ['彩虹ID 7 天', '上传 5 GB', '魔力 100 ', '特等奖 纪念品'],
+        prizes: ['邀请 1 个', '魔力 780000 ', 'VIP 7 Day(s)'],
         balance: 1000000
     });
 
-    const notifyLog = path.join(TMP, 'notify-custom-big-prizes.log');
+    const notifyLog = path.join(TMP, 'notify-no-invite.log');
     const mockSendNotify = `const fs = require('fs');
 module.exports = {
     sendNotify: async (title, content) => {
@@ -1393,14 +1393,15 @@ module.exports = {
     }
 };`;
 
-    // 配置只推送：彩虹ID、上传量，以及包含关键词 '特等奖' 的奖品
+    // 开启大奖通知，但关闭邀请通知
     const { dir, file } = installScript(
         {
             host: site.state.origin,
-            draws: 4,
+            draws: 3,
             notifyBigPrize: true,
-            bigPrizeTypes: ['rainbow', 'upload'],
-            bigPrizeKeywords: '特等奖'
+            notifyInvite: false,
+            notifyVip: true,
+            bigPrizeMinBeans: 780000
         },
         null,
         { 'sendNotify.js': mockSendNotify }
@@ -1410,11 +1411,10 @@ module.exports = {
     const notifications = fs.existsSync(notifyLog) ? fs.readFileSync(notifyLog, 'utf8').split('---END---').filter(Boolean) : [];
 
     check('正常退出', code === 0, `exit ${code}`);
-    check('日志报了 3 次大奖命中（彩虹ID、上传量、特等奖关键词）', (out.match(/命中大奖/g) || []).length === 3, out.slice(-800));
-    check('彩虹ID大奖推了通知', notifications.some(n => /彩虹ID/.test(n)), notifications.join('\n'));
-    check('上传量大奖推了通知', notifications.some(n => /上传量/.test(n)), notifications.join('\n'));
-    check('特等奖关键词大奖推了通知', notifications.some(n => /特等奖/.test(n)), notifications.join('\n'));
-    check('普通 100 憨豆未触发大奖通知', !notifications.some(n => /命中大奖：.*100 憨豆/.test(n)), notifications.join('\n'));
+    check('日志报了 2 次大奖命中（VIP 与 78w 憨豆，排除了邀请）', (out.match(/命中大奖/g) || []).length === 2, out.slice(-800));
+    check('VIP 大奖推了通知', notifications.some(n => /VIP/.test(n)), notifications.join('\n'));
+    check('78w 憨豆大奖推了通知', notifications.some(n => /780,000 憨豆/.test(n)), notifications.join('\n'));
+    check('抽到邀请没有触发大奖通知', !notifications.some(n => /命中大奖：.*邀请/.test(n)), notifications.join('\n'));
 
     await site.close();
 }

@@ -62,58 +62,48 @@ const CONFIG = {
     /* ⑦ 持续模式下，余额不足时的休眠检查间隔（分钟）。默认 10 分钟 */
     sleepOnLowMinutes: 10,
 
-    /* ⑧ 大奖即时通知。
-          抽中指定的大奖时立即推送通知 */
+    /* ⑧ 大奖即时通知开关。
+          命中设定的大奖时立即推送通知 */
     notifyBigPrize: true,
 
-    /* ⑨ 自定义大奖类型（抽中即刻推送通知）。
-          可选类型：'invite'（邀请）, 'vip'（VIP）, 'beans'（憨豆）, 'rainbow'（彩虹ID）,
-                   'upload'（上传量）, 'makeup'（补签卡）, 'rename'（改名卡）, 'all'（全部中奖）
-          支持数组 ['invite', 'vip', 'beans'] 或逗号字符串 'invite,vip,beans,rainbow'
-          默认：['invite', 'vip', 'beans'] */
-    bigPrizeTypes: ['invite', 'vip', 'beans'],
+    /* ⑨ 抽中「邀请」是否推送大奖通知（true = 通知，false = 不通知） */
+    notifyInvite: true,
 
-    /* ⑩ 触发大奖推送的憨豆数值门槛（默认 780000 即 78w）。当 bigPrizeTypes 包含 'beans' 时生效 */
+    /* ⑩ 抽中「VIP」是否推送大奖通知（true = 通知，false = 不通知） */
+    notifyVip: true,
+
+    /* ⑪ 触发大奖推送的憨豆/数值门槛（默认 780000 即 78w，填 0 则不按憨豆推大奖） */
     bigPrizeMinBeans: 780000,
 
-    /* ⑪ 触发大奖推送的上传量门槛（GB，默认 0 表示中任意上传量都推）。当 bigPrizeTypes 包含 'upload' 时生效 */
-    bigPrizeMinUpload: 0,
-
-    /* ⑫ 触发大奖推送的彩虹ID天数门槛（天，默认 0 表示中任意天数都推）。当 bigPrizeTypes 包含 'rainbow' 时生效 */
-    bigPrizeMinRainbow: 0,
-
-    /* ⑬ 自定义大奖关键词（只要奖品文案包含此关键词立即推送，多个用逗号隔开，可选，如 '特等,专属'） */
-    bigPrizeKeywords: '',
-
-    /* ⑭ 定期统计简报推送间隔（分钟）。
+    /* ⑫ 定期统计简报推送间隔（分钟）。
           例如 60 = 每隔 1 小时推送一次时段中奖简报；
           填 0 = 不发送周期简报，仅在大奖或结束时推送 */
     reportIntervalMinutes: 60,
 
-    /* ⑮ 抽完顺手清掉「幸运大转盘 中奖通知」站内信。
+    /* ⑬ 抽完顺手清掉「幸运大转盘 中奖通知」站内信。
           站点每抽一次就发一封，不清的话收件箱很快被埋掉。
           只删这一种，「种子被删除」之类的一封不碰 */
     cleanMail: false,
 
-    /* ⑯ 统计存到哪个文件。跨次运行累计，留空 '' 就是不记 */
+    /* ⑭ 统计存到哪个文件。跨次运行累计，留空 '' 就是不记 */
     statsFile: 'hh_lottery_stats.json',
 
-    /* ⑰ 要导入的历史备份 JSON 文件路径（可选，也可通过 CLI: node hh_lottery.js --import <file> 导入） */
+    /* ⑮ 要导入的历史备份 JSON 文件路径（可选，也可通过 CLI: node hh_lottery.js --import <file> 导入） */
     importFile: '',
 
-    /* ⑱ Telegram 推送配置（可选，也可在青龙环境变量配置 TG_BOT_TOKEN 与 TG_USER_ID） */
+    /* ⑯ Telegram 推送配置（可选，也可在青龙环境变量配置 TG_BOT_TOKEN 与 TG_USER_ID） */
     tgBotToken: '',
     tgUserId: '',
     tgApiHost: '',
 
-    /* ⑲ 日志时间按哪个时区显示。
+    /* ⑰ 日志时间按哪个时区显示。
           青龙容器默认常是 UTC，不设这个的话日志时间对不上 */
     timezone: 'Asia/Shanghai',
 
-    /* ⑳ 站点域名，一般不用改 */
+    /* ⑱ 站点域名，一般不用改 */
     host: 'hhanclub.net',
 
-    /* ㉑ User-Agent，一般不用改 */
+    /* ⑲ User-Agent，一般不用改 */
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
         + '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
 };
@@ -159,13 +149,11 @@ function loadEnvConfig() {
     if (env.HH_CONTINUOUS !== undefined) CONFIG.continuous = env.HH_CONTINUOUS === 'true' || env.HH_CONTINUOUS === '1';
     if (env.HH_SLEEP_ON_LOW !== undefined) CONFIG.sleepOnLowMinutes = env.HH_SLEEP_ON_LOW;
     if (env.HH_NOTIFY_BIG_PRIZE !== undefined) CONFIG.notifyBigPrize = env.HH_NOTIFY_BIG_PRIZE !== 'false' && env.HH_NOTIFY_BIG_PRIZE !== '0';
-    if (env.HH_BIG_PRIZE_TYPES !== undefined) CONFIG.bigPrizeTypes = env.HH_BIG_PRIZE_TYPES;
+    if (env.HH_NOTIFY_INVITE !== undefined) CONFIG.notifyInvite = env.HH_NOTIFY_INVITE !== 'false' && env.HH_NOTIFY_INVITE !== '0';
+    if (env.HH_NOTIFY_VIP !== undefined) CONFIG.notifyVip = env.HH_NOTIFY_VIP !== 'false' && env.HH_NOTIFY_VIP !== '0';
     if (env.HH_BIG_PRIZE_MIN !== undefined || env.HH_BIG_PRIZE_MIN_BEANS !== undefined) {
         CONFIG.bigPrizeMinBeans = env.HH_BIG_PRIZE_MIN !== undefined ? env.HH_BIG_PRIZE_MIN : env.HH_BIG_PRIZE_MIN_BEANS;
     }
-    if (env.HH_BIG_PRIZE_MIN_UPLOAD !== undefined) CONFIG.bigPrizeMinUpload = env.HH_BIG_PRIZE_MIN_UPLOAD;
-    if (env.HH_BIG_PRIZE_MIN_RAINBOW !== undefined) CONFIG.bigPrizeMinRainbow = env.HH_BIG_PRIZE_MIN_RAINBOW;
-    if (env.HH_BIG_PRIZE_KEYWORDS !== undefined) CONFIG.bigPrizeKeywords = env.HH_BIG_PRIZE_KEYWORDS;
     if (env.HH_REPORT_INTERVAL !== undefined) CONFIG.reportIntervalMinutes = env.HH_REPORT_INTERVAL;
     if (env.HH_CLEAN_MAIL !== undefined) CONFIG.cleanMail = env.HH_CLEAN_MAIL === 'true' || env.HH_CLEAN_MAIL === '1';
     if (env.HH_STATS_FILE !== undefined) CONFIG.statsFile = env.HH_STATS_FILE;
@@ -191,50 +179,9 @@ function normalizeConfig() {
     CONFIG.continuous = CONFIG.continuous === true || String(CONFIG.continuous).toLowerCase() === 'true' || String(CONFIG.continuous) === '1';
     CONFIG.sleepOnLowMinutes = int(CONFIG.sleepOnLowMinutes, 10, 1);
     CONFIG.notifyBigPrize = CONFIG.notifyBigPrize !== false && String(CONFIG.notifyBigPrize).toLowerCase() !== 'false' && String(CONFIG.notifyBigPrize) !== '0';
-
-    const parseTypes = val => {
-        let list = [];
-        if (Array.isArray(val)) {
-            list = val;
-        } else if (typeof val === 'string' && val.trim()) {
-            list = val.split(/[,，|/ ]+/).map(s => s.trim()).filter(Boolean);
-        } else {
-            list = ['invite', 'vip', 'beans'];
-        }
-
-        const aliasMap = {
-            all: 'all', 全部: 'all', 所有: 'all',
-            beans: 'beans', 憨豆: 'beans', 魔力: 'beans', 豆: 'beans',
-            invite: 'invite', 邀请: 'invite', 邀请码: 'invite',
-            vip: 'vip', VIP: 'vip', 会员: 'vip',
-            rainbow: 'rainbow', 彩虹: 'rainbow', 彩虹id: 'rainbow', 彩虹ID: 'rainbow',
-            makeup: 'makeup', 补签: 'makeup', 补签卡: 'makeup',
-            upload: 'upload', 上传: 'upload', 上传量: 'upload', 流量: 'upload',
-            rename: 'rename', 改名: 'rename', 改名卡: 'rename'
-        };
-
-        const result = list.map(item => {
-            const lower = String(item).toLowerCase();
-            return aliasMap[lower] || aliasMap[item] || lower;
-        });
-
-        return result.length > 0 ? result : ['invite', 'vip', 'beans'];
-    };
-
-    CONFIG.bigPrizeTypes = parseTypes(CONFIG.bigPrizeTypes);
+    CONFIG.notifyInvite = CONFIG.notifyInvite !== false && String(CONFIG.notifyInvite).toLowerCase() !== 'false' && String(CONFIG.notifyInvite) !== '0';
+    CONFIG.notifyVip = CONFIG.notifyVip !== false && String(CONFIG.notifyVip).toLowerCase() !== 'false' && String(CONFIG.notifyVip) !== '0';
     CONFIG.bigPrizeMinBeans = int(CONFIG.bigPrizeMinBeans, 780000, 0);
-    CONFIG.bigPrizeMinUpload = int(CONFIG.bigPrizeMinUpload, 0, 0);
-    CONFIG.bigPrizeMinRainbow = int(CONFIG.bigPrizeMinRainbow, 0, 0);
-
-    if (typeof CONFIG.bigPrizeKeywords === 'string') {
-        CONFIG.bigPrizeKeywords = CONFIG.bigPrizeKeywords
-            .split(/[,，|/]+/)
-            .map(s => s.trim())
-            .filter(Boolean);
-    } else if (!Array.isArray(CONFIG.bigPrizeKeywords)) {
-        CONFIG.bigPrizeKeywords = [];
-    }
-
     CONFIG.reportIntervalMinutes = int(CONFIG.reportIntervalMinutes, 60, 0);
     CONFIG.cleanMail = CONFIG.cleanMail === true || String(CONFIG.cleanMail).toLowerCase() === 'true' || String(CONFIG.cleanMail) === '1';
     CONFIG.host = String(CONFIG.host || 'hhanclub.net').trim().replace(/\/+$/, '');
@@ -444,37 +391,14 @@ function parsePrizeText(text) {
     return fallback;
 }
 
-/* 判定是否为自定义大奖（邀请、VIP、78w+ 憨豆或用户自定义设置的奖品类型/关键词/门槛） */
-function isBigPrize(prize, prizeText = '') {
-    if (!CONFIG.notifyBigPrize || !prize) return false;
-
-    // 1. 自定义关键词优先命中
-    if (Array.isArray(CONFIG.bigPrizeKeywords) && CONFIG.bigPrizeKeywords.length > 0) {
-        const text = `${prizeText || ''} ${prize.label || ''}`.toLowerCase();
-        for (const kw of CONFIG.bigPrizeKeywords) {
-            if (kw && text.includes(String(kw).toLowerCase())) return true;
-        }
-    }
-
-    if (prize.type === 'unknown') return false;
-
-    const types = Array.isArray(CONFIG.bigPrizeTypes) ? CONFIG.bigPrizeTypes : ['invite', 'vip', 'beans'];
-    if (types.includes('all')) return true;
-
-    const pType = prize.type === 'magic' ? 'beans' : prize.type;
-    if (!types.includes(pType)) return false;
-
-    if (pType === 'beans') {
-        return prize.value >= (CONFIG.bigPrizeMinBeans ?? 780000);
-    }
-    if (pType === 'upload') {
-        return prize.value >= (CONFIG.bigPrizeMinUpload ?? 0);
-    }
-    if (pType === 'rainbow') {
-        return prize.value >= (CONFIG.bigPrizeMinRainbow ?? 0);
-    }
-
-    return true;
+/* 判定是否为大奖（邀请、VIP、78w+ 憨豆等） */
+function isBigPrize(prize) {
+    if (!CONFIG.notifyBigPrize || !prize || prize.type === 'unknown') return false;
+    if (prize.type === 'invite') return CONFIG.notifyInvite;
+    if (prize.type === 'vip') return CONFIG.notifyVip;
+    if (prize.type === 'beans' && CONFIG.bigPrizeMinBeans > 0) return prize.value >= CONFIG.bigPrizeMinBeans;
+    if (prize.value >= CONFIG.bigPrizeMinBeans && CONFIG.bigPrizeMinBeans > 0) return true;
+    return false;
 }
 
 /* 收件箱里只有主题带这几个字的会被删 */
@@ -1646,17 +1570,11 @@ async function main() {
         log(`   一抽到底 · 保留 ${fmt(CONFIG.reserve)} 憨豆 · 间隔 ${CONFIG.interval} 秒`);
     }
     if (CONFIG.notifyBigPrize) {
-        const typeLabels = CONFIG.bigPrizeTypes.map(t => {
-            if (t === 'all') return '全部中奖';
-            if (t === 'beans') return CONFIG.bigPrizeMinBeans > 0 ? `≥ ${fmt(CONFIG.bigPrizeMinBeans)} 憨豆` : '憨豆';
-            if (t === 'upload') return CONFIG.bigPrizeMinUpload > 0 ? `≥ ${fmt(CONFIG.bigPrizeMinUpload)} GB上传` : '上传量';
-            if (t === 'rainbow') return CONFIG.bigPrizeMinRainbow > 0 ? `≥ ${fmt(CONFIG.bigPrizeMinRainbow)} 天彩虹ID` : '彩虹ID';
-            return PRIZE_META[t]?.name || t;
-        });
-        if (CONFIG.bigPrizeKeywords && CONFIG.bigPrizeKeywords.length > 0) {
-            typeLabels.push(`关键词[${CONFIG.bigPrizeKeywords.join(',')}]`);
-        }
-        log(`🎉 大奖推送：已启用（命中 ${typeLabels.join(' / ')} 立即通知）`);
+        const bigItems = [];
+        if (CONFIG.notifyInvite) bigItems.push('邀请');
+        if (CONFIG.notifyVip) bigItems.push('VIP');
+        if (CONFIG.bigPrizeMinBeans > 0) bigItems.push(`≥ ${fmt(CONFIG.bigPrizeMinBeans)} 憨豆`);
+        log(`🎉 大奖推送：已启用（命中 ${bigItems.length ? bigItems.join(' / ') : '无'} 立即通知）`);
     }
     if (CONFIG.reportIntervalMinutes > 0) {
         log(`📊 定期简报：每隔 ${CONFIG.reportIntervalMinutes} 分钟推送一次`);
