@@ -136,7 +136,7 @@ const RUNTIME = {
     requestRetries: 3,
     requestRetryStepMs: 1000,
     // 连续被限流多少次放弃
-    maxRateLimits: 12,
+    maxRateLimits: 200,
     // 被限流后的退避
     backoffAfter: 3,
     backoffFactor: 1.5,
