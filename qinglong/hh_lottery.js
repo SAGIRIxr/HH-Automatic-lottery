@@ -70,8 +70,14 @@ const CONFIG = {
           挂机跑一晚上的话，中了大奖当场就能知道 */
     notifyBigPrize: true,
 
-    /* ⑪ 多少憨豆算大奖。填 0 就只有 VIP 才推 */
+    /* ⑪ 多少憨豆算大奖。填 0 就只有 VIP 才推。
+          这个门槛同时管着下面的 stopOnBigPrize */
     bigPrizeMinBeans: 780000,
+
+    /* ⑪.5 中了大奖就收工，这一轮剩下的次数不抽了。
+           想在中奖那一刻把余额和记录定住、回头慢慢对账的话打开它。
+           跟 notifyBigPrize 是两回事：通知关着，这个照样能停 */
+    stopOnBigPrize: false,
 
     /* ⑫ 定时播报战报。默认关着 —— 跑一轮就推一条收尾通知已经够用了，
           想要中途也播报再打开。开了之后每隔 periodicMinutes 分钟推一次
@@ -218,6 +224,7 @@ function normalizeConfig() {
     CONFIG.cleanMail = CONFIG.cleanMail === true;
     CONFIG.notifyBigPrize = CONFIG.notifyBigPrize !== false;
     CONFIG.bigPrizeMinBeans = int(CONFIG.bigPrizeMinBeans, 780000, 0);
+    CONFIG.stopOnBigPrize = CONFIG.stopOnBigPrize === true;
     // 这个是默认关的，得显式打开 —— 和 notifyBigPrize 那种默认开的不一样，
     // 别照着抄成 !== false
     CONFIG.notifyPeriodic = CONFIG.notifyPeriodic === true;
@@ -1001,14 +1008,18 @@ class Lottery {
     /* 挂机跑一晚上，中了大奖当场推一条 —— 不然要等跑完才知道。
        口径和油猴版的全屏庆祝一致：VIP，或单笔憨豆到门槛。
        推送失败不能影响抽奖，吞掉就是了。 */
-    async pushBigPrize(prize, prizeText) {
-        if (!CONFIG.notifyBigPrize) return;
-
-        const big = prize.type === 'vip'
+    /* 算不算大奖。通知和「中奖就停」共用一个口径 —— 两处各写一遍的话，
+       哪天改了门槛只改一处，就会出现推了通知却不停、或者反过来。 */
+    isBigPrize(prize) {
+        return prize.type === 'vip'
             || (CONFIG.bigPrizeMinBeans > 0
                 && prize.type === 'beans'
                 && prize.value >= CONFIG.bigPrizeMinBeans);
-        if (!big) return;
+    }
+
+    async pushBigPrize(prize, prizeText) {
+        if (!CONFIG.notifyBigPrize) return;
+        if (!this.isBigPrize(prize)) return;
 
         /* label 只是档位（VIP 那档就是「7 天」），单独拿出来看不出中的是
            什么奖 —— 通知里写着「⭐ 7 天」，谁知道是 VIP 还是彩虹 ID。
@@ -1044,7 +1055,7 @@ class Lottery {
             `  🚀 净盈亏：${profit >= 0 ? '+' : ''}${fmt(profit)}（${rate >= 0 ? '+' : ''}${rate.toFixed(1)}%）`,
             `  💰 当前余额：${fmt(this.balance)} 憨豆`,
             '━━━━━━━━━━━━━━━━━━━',
-            '🌟 后台持续挂机抽奖中'
+            CONFIG.stopOnBigPrize ? '🛑 已按设置停止本轮抽奖' : '🌟 后台持续挂机抽奖中'
         ].join('\n');
 
         try {
@@ -1229,6 +1240,14 @@ class Lottery {
 
                 if (prize.type === 'vip') await this.reconcileVip(prize);
                 await this.pushBigPrize(prize, prizeText);
+
+                /* 中了大奖就收工。放在 VIP 折算和通知之后 —— 那两件事
+                   得先办完，不然这一注的账记不齐、通知也发不出去。 */
+                if (CONFIG.stopOnBigPrize && this.isBigPrize(prize)) {
+                    this.stopReason = `中了大奖（${prizeText.trim()}），按设置停止`;
+                    report(`🏆 中了大奖：${prizeText.trim()} · 按设置停止本轮`);
+                    break;
+                }
 
                 // 定时战报：达到设定分钟数且有增量抽奖时推送
                 if (CONFIG.notifyPeriodic && CONFIG.periodicMinutes > 0

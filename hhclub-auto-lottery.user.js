@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HHCLUB 自动抽奖 · 情绪价值拉满版
 // @namespace    http://tampermonkey.net/
-// @version      1.32.0
+// @version      1.33.0
 // @description  HHCLUB 自动抽奖增强版 · 分奖项中奖次数统计 · 一抽到底 · 实时余额 · 站内信清理
 // @author       Timqaq, JIEDIAO
 // @match        https://hhanclub.net/lucky.php
@@ -211,6 +211,10 @@
     let lastDrawSentAt = 0;
     // 被限流后下一次等待的覆盖值（快速补枪），用一次就清
     let quickRetryMs = 0;
+    /* 中了大奖、且开了「中奖即停」时，把奖品文案暂存在这里。
+       不当场停 —— VIP 那一注还要回站点核一下是不是被换成了憨豆，
+       停早了这笔账就记岔了。等那件事办完再停。 */
+    let pendingJackpotStop = null;
     // 后台保活用的音频节点
     let keepAliveCtx = null;
     // 最近一次循环推进的时刻，看门狗据此判断是不是被冻住过
@@ -235,6 +239,7 @@
         detailOpen: 'none',
         drainMode: false,
         reserveBeans: 0,
+        stopOnJackpot: false,
         autoCleanMail: false,
         mailPageSizePrompted: false,
         panelLeft: null,
@@ -587,6 +592,8 @@
         if (settings.viewMode !== 'total') settings.viewMode = 'current';
         if (settings.detailOpen !== 'all') settings.detailOpen = 'none';
         settings.animation = settings.animation !== false;
+        // 这个默认关：挂机的人多半不希望半夜被一注 780,000 停在那儿
+        settings.stopOnJackpot = settings.stopOnJackpot === true;
     }
 
     function saveSettings() {
@@ -1046,9 +1053,14 @@
 
         render();
 
+        // 开着「中奖即停」的时候，抽完这一注就收工 —— 但真正停在
+        // runSingleDraw 那边做，VIP 折算之类的后续还得跑完
+        const willStop = jackpot && running && settings.stopOnJackpot;
+        if (willStop) pendingJackpotStop = String(prizeText).trim();
+
         if (jackpot) addLog(`👑 大奖！${prizeText}`, 'success');
         if (settings.animation) {
-            if (jackpot) showJackpotAnimation(prizeText);
+            if (jackpot) showJackpotAnimation(prizeText, willStop);
             else showWinAnimation(prizeText);
         }
     }
@@ -2171,6 +2183,16 @@
                     每 ${CONFIG.balanceSyncEveryDraws} 抽顺手清一次，只删主题带「${CONFIG.lotteryMailKeyword}」的，别的信不碰
                 </div>
 
+                <div class="hh-drain">
+                    <label class="hh-drain-toggle">
+                        <input type="checkbox" id="stop-on-jackpot">
+                        <span>🏆 中大奖就停</span>
+                    </label>
+                </div>
+                <div id="jackpot-stop-hint" class="hh-drain-hint">
+                    抽中 VIP 或 ${fmt(CONFIG.jackpotBeansFloor)} 憨豆以上就收手，留着现场对账、截图
+                </div>
+
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-top:7px;">
                     <span style="font-size:10px;color:#a08066;font-weight:500;">
                         当前间隔 <b id="current-interval" style="color:#5a4030;">6.8</b> 秒
@@ -2812,7 +2834,7 @@
     /* 大奖专用全屏庆祝：整屏压暗 + 金色光爆 + 奖品名放大登场 + 双向礼花。
        和普通中奖动画一样受「中奖动画」开关和 document.hidden 控制，
        prefers-reduced-motion 下由 CSS 收敛成静态显示。 */
-    function showJackpotAnimation(prizeText) {
+    function showJackpotAnimation(prizeText, willStop) {
         if (document.hidden) return;
 
         document.querySelectorAll('.hh-jackpot-overlay').forEach(node => node.remove());
@@ -2830,7 +2852,9 @@
                 <button type="button" class="hh-jackpot-close">
                     截好了，关掉（<span class="hh-jackpot-left">${seconds}</span>s）
                 </button>
-                <div class="hh-jackpot-hint">点任意处或按 Esc 也能关 · 抽奖没停，在后台照跑</div>
+                <div class="hh-jackpot-hint">点任意处或按 Esc 也能关 · ${willStop
+                    ? '已按设置停止抽奖，慢慢看'
+                    : '抽奖没停，在后台照跑'}</div>
             </div>
         `;
 
@@ -3069,6 +3093,13 @@
             if (prize.type === 'vip') await reconcileVipPrize(prize);
             if (!running) return;
 
+            if (pendingJackpotStop) {
+                const text = pendingJackpotStop;
+                pendingJackpotStop = null;
+                stopLottery(`🏆 抽到大奖，已按设置停止 · ${text}`);
+                return;
+            }
+
             if (drawsSinceCalibration >= CONFIG.balanceSyncEveryDraws) {
                 await calibrateBalance({ quiet: true });
                 await autoCleanMail();
@@ -3207,6 +3238,7 @@
         lastDurationMs = 0;
         lastDrawSentAt = 0;
         quickRetryMs = 0;
+        pendingJackpotStop = null;
         lastTickAt = Date.now();
         setDurationInfo();
         // 趁着点击这个手势把保活挂起来，晚了就要被 autoplay 策略拦
@@ -4215,6 +4247,12 @@
             applyMailUI();
         });
 
+        on('stop-on-jackpot', 'change', event => {
+            settings.stopOnJackpot = event.target.checked;
+            saveSettings();
+            applyJackpotStopUI();
+        });
+
         on('reserve-beans', 'change', event => {
             const value = Math.max(0, parseInt(event.target.value, 10) || 0);
             event.target.value = value;
@@ -4286,9 +4324,13 @@
         const mailToggle = $('auto-clean-mail');
         if (mailToggle) mailToggle.checked = !!settings.autoCleanMail;
 
+        const jackpotStopToggle = $('stop-on-jackpot');
+        if (jackpotStopToggle) jackpotStopToggle.checked = !!settings.stopOnJackpot;
+
         applyDurationUI();
         applyDrainUI();
         applyMailUI();
+        applyJackpotStopUI();
 
         setText('toggle-animation', `🎉 中奖动画：${settings.animation ? '开' : '关'}`);
         setText('toggle-all-tiers', settings.detailOpen === 'all' ? '🔼 收起全部档位' : '🔽 展开全部档位');
@@ -4335,6 +4377,10 @@
 
     function applyMailUI() {
         $('mail-hint')?.classList.toggle('is-on', !!settings.autoCleanMail);
+    }
+
+    function applyJackpotStopUI() {
+        $('jackpot-stop-hint')?.classList.toggle('is-on', !!settings.stopOnJackpot);
     }
 
     function init() {

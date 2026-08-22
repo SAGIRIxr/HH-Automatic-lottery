@@ -2151,6 +2151,75 @@ console.log('\n[69] 憨豆大奖不重复写名字');
     await site.close();
 }
 
+/* ---------------------------------------------------------------- */
+console.log('\n[70] 中大奖就收工（stopOnBigPrize）');
+{
+    // 第 2 抽给 780,000，后面还剩 3 抽的额度 —— 停没停看站点收到几次就知道
+    const site = await startSite({
+        prizes: ['魔力 100 ', '魔力 780000 ', '魔力 100 ', '魔力 100 ', '魔力 100 '],
+        balance: 1000000
+    });
+    const hook = await startWebhook();
+
+    const { out } = await runScript({
+        host: site.state.origin, draws: 5, interval: 0.3,
+        stopOnBigPrize: true, notifyBigPrize: true, bigPrizeMinBeans: 780000,
+        webhookUrl: hook.url
+    });
+
+    check('抽到大奖那一注就收手', site.state.draws === 2, `实际 ${site.state.draws}`);
+    check('第 1 抽的小奖没触发停机', /第 1 抽/.test(out), out.slice(-900));
+    check('日志点明是中大奖才停的', /中了大奖.*按设置停止/.test(out), out.slice(-900));
+
+    const big = hook.got.find(item => /命中大奖/.test(item.title || ''));
+    check('大奖通知照发', !!big, hook.got.map(i => i.title).join(' | '));
+    check('通知末行说的是已停止，不是「后台持续挂机中」',
+        /已按设置停止本轮抽奖/.test(big?.content || '')
+        && !/后台持续挂机/.test(big?.content || ''), big?.content);
+    check('收尾汇总里写明了停止原因',
+        hook.got.some(item => /中了大奖/.test(item.content || '')),
+        hook.got.map(i => i.content).join(' | ').slice(0, 400));
+
+    await hook.close();
+    await site.close();
+}
+
+/* ---------------------------------------------------------------- */
+console.log('\n[71] 停机和通知是两个开关，互不牵连');
+{
+    // 默认不开：中了也接着抽
+    const idle = await startSite({
+        prizes: ['魔力 780000 ', '魔力 100 '], balance: 1000000
+    });
+    await runScript({
+        host: idle.state.origin, draws: 4, interval: 0.3, notifyBigPrize: false
+    });
+    check('没打开开关就一路抽满 4 抽', idle.state.draws === 4, `实际 ${idle.state.draws}`);
+    await idle.close();
+
+    // 通知关着，停机照样生效 —— 别把两件事绑在一起
+    const quiet = await startSite({
+        prizes: ['魔力 100 ', '魔力 780000 ', '魔力 100 ', '魔力 100 '], balance: 1000000
+    });
+    await runScript({
+        host: quiet.state.origin, draws: 4, interval: 0.3,
+        notifyBigPrize: false, stopOnBigPrize: true
+    });
+    check('通知关着也能停在第 2 抽', quiet.state.draws === 2, `实际 ${quiet.state.draws}`);
+    await quiet.close();
+
+    // 门槛之下的不算大奖，不该停
+    const small = await startSite({
+        prizes: ['魔力 5000 '], balance: 1000000
+    });
+    await runScript({
+        host: small.state.origin, draws: 3, interval: 0.3,
+        stopOnBigPrize: true, bigPrizeMinBeans: 780000
+    });
+    check('没到门槛的奖不触发停机', small.state.draws === 3, `实际 ${small.state.draws}`);
+    await small.close();
+}
+
 fs.rmSync(TMP, { recursive: true, force: true });
 
 console.log(`\n=========== ${passed} passed, ${failed} failed ===========\n`);
