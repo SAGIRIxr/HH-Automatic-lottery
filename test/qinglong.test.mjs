@@ -206,6 +206,8 @@ const DEFAULT_CONFIG = {
     cookie: 'c_secure_uid=test',
     notifyBigPrize: false,
     bigPrizeMinBeans: 780000,
+    stopOnVip: false,
+    stopOn780k: false,
     notifyPeriodic: false,
     periodicMinutes: 30,
     tgBotToken: '',
@@ -2152,72 +2154,98 @@ console.log('\n[69] 憨豆大奖不重复写名字');
 }
 
 /* ---------------------------------------------------------------- */
-console.log('\n[70] 中大奖就收工（stopOnBigPrize）');
+console.log('\n[70] 中奖就停：VIP 与 780,000 憨豆独立配置');
 {
-    // 第 2 抽给 780,000，后面还剩 3 抽的额度 —— 停没停看站点收到几次就知道
-    const site = await startSite({
-        prizes: ['魔力 100 ', '魔力 780000 ', '魔力 100 ', '魔力 100 ', '魔力 100 '],
-        balance: 1000000
+    // 只开 78 万：第 1 抽 VIP 不停，第 2 抽 78 万才停
+    const beansSite = await startSite({
+        prizes: ['VIP 7 Day(s)', '魔力 780000 ', '魔力 100 ', '魔力 100 '],
+        balance: 1000000, userClass: 'user', swapBeans: 1000000
+    });
+    const beansRun = await runScript({
+        host: beansSite.state.origin, draws: 4, interval: 0.3,
+        stopOnVip: false, stopOn780k: true, notifyBigPrize: false
+    });
+    check('只开 78 万：VIP 不停，到 780,000 才收手', beansSite.state.draws === 2,
+        `实际 ${beansSite.state.draws}`);
+    check('日志点明命中 780,000 憨豆', /780,000.*按设置停止/.test(beansRun.out), beansRun.out.slice(-900));
+    await beansSite.close();
+
+    // 只开 VIP：第 1 抽 78 万不停，第 2 抽 VIP 才停
+    const vipSite = await startSite({
+        prizes: ['魔力 780000 ', 'VIP 7 Day(s)', '魔力 100 ', '魔力 100 '],
+        balance: 1000000, userClass: 'user', swapBeans: 1000000
     });
     const hook = await startWebhook();
-
-    const { out } = await runScript({
-        host: site.state.origin, draws: 5, interval: 0.3,
-        stopOnBigPrize: true, notifyBigPrize: true, bigPrizeMinBeans: 780000,
-        webhookUrl: hook.url
+    const vipRun = await runScript({
+        host: vipSite.state.origin, draws: 4, interval: 0.3,
+        stopOnVip: true, stopOn780k: false, notifyBigPrize: true, webhookUrl: hook.url
     });
+    check('只开 VIP：780,000 不停，到 VIP 才收手', vipSite.state.draws === 2,
+        `实际 ${vipSite.state.draws}`);
+    check('日志点明命中 VIP', /VIP 7 Day\(s\).*按设置停止/.test(vipRun.out), vipRun.out.slice(-900));
 
-    check('抽到大奖那一注就收手', site.state.draws === 2, `实际 ${site.state.draws}`);
-    check('第 1 抽的小奖没触发停机', /第 1 抽/.test(out), out.slice(-900));
-    check('日志点明是中大奖才停的', /中了大奖.*按设置停止/.test(out), out.slice(-900));
-
-    const big = hook.got.find(item => /命中大奖/.test(item.title || ''));
-    check('大奖通知照发', !!big, hook.got.map(i => i.title).join(' | '));
-    check('通知末行说的是已停止，不是「后台持续挂机中」',
-        /已按设置停止本轮抽奖/.test(big?.content || '')
-        && !/后台持续挂机/.test(big?.content || ''), big?.content);
-    check('收尾汇总里写明了停止原因',
-        hook.got.some(item => /中了大奖/.test(item.content || '')),
-        hook.got.map(i => i.content).join(' | ').slice(0, 400));
-
+    const bigNotices = hook.got.filter(item => /命中大奖/.test(item.title || ''));
+    check('未命中停止项的 780,000 通知说继续挂机',
+        /780,000/.test(bigNotices[0]?.content || '') && /后台持续挂机/.test(bigNotices[0]?.content || ''),
+        bigNotices[0]?.content);
+    check('真正命中停止项的 VIP 通知才说已停止',
+        /VIP/.test(bigNotices[1]?.content || '') && /已按设置停止本轮抽奖/.test(bigNotices[1]?.content || ''),
+        bigNotices[1]?.content);
     await hook.close();
-    await site.close();
+    await vipSite.close();
 }
 
 /* ---------------------------------------------------------------- */
-console.log('\n[71] 停机和通知是两个开关，互不牵连');
+console.log('\n[71] VIP 折算仍是 VIP，不冒充普通憨豆档位');
 {
-    // 默认不开：中了也接着抽
-    const idle = await startSite({
-        prizes: ['魔力 780000 ', '魔力 100 '], balance: 1000000
+    const swapped = await startSite({
+        prizes: ['VIP 7 Day(s)', '魔力 100 ', '魔力 100 '],
+        balance: 1000000, userClass: 'vip', swapBeans: 1000000,
+        onDraw: (state, text) => { if (text.includes('VIP')) state.balance += 1000000; }
     });
-    await runScript({
-        host: idle.state.origin, draws: 4, interval: 0.3, notifyBigPrize: false
+    const swappedRun = await runScript({
+        host: swapped.state.origin, draws: 3, interval: 0.3,
+        stopOnVip: false, stopOn780k: true, notifyBigPrize: false
     });
-    check('没打开开关就一路抽满 4 抽', idle.state.draws === 4, `实际 ${idle.state.draws}`);
-    await idle.close();
+    check('VIP 确实完成了 1,000,000 折算', /站点改发了 1,000,000 憨豆/.test(swappedRun.out),
+        swappedRun.out.slice(-900));
+    check('只开 78 万时，VIP 折算成 100 万也不停', swapped.state.draws === 3,
+        `实际 ${swapped.state.draws}`);
+    await swapped.close();
 
-    // 通知关着，停机照样生效 —— 别把两件事绑在一起
-    const quiet = await startSite({
-        prizes: ['魔力 100 ', '魔力 780000 ', '魔力 100 ', '魔力 100 '], balance: 1000000
+    // 78 万选项只认精确档位，不把普通 100 万憨豆奖算进去
+    const million = await startSite({
+        prizes: ['魔力 1000000 ', '魔力 100 ', '魔力 100 '], balance: 2000000
     });
     await runScript({
-        host: quiet.state.origin, draws: 4, interval: 0.3,
+        host: million.state.origin, draws: 3, interval: 0.3,
+        stopOnVip: false, stopOn780k: true, notifyBigPrize: false
+    });
+    check('普通 1,000,000 憨豆不是 780,000 档，不触发停止', million.state.draws === 3,
+        `实际 ${million.state.draws}`);
+    await million.close();
+}
+
+/* ---------------------------------------------------------------- */
+console.log('\n[71b] 旧 stopOnBigPrize=true 自动迁移为两项都开');
+{
+    const site = await startSite({
+        prizes: ['魔力 100 ', '魔力 780000 ', '魔力 100 '], balance: 1000000
+    });
+    const { dir, file } = installScript({ host: site.state.origin, draws: 3, interval: 0.3 });
+    fs.writeFileSync(path.join(dir, 'hh_lottery.config.json'), JSON.stringify({
+        cookie: 'c_secure_uid=test', host: site.state.origin, draws: 3, interval: 0.3,
         notifyBigPrize: false, stopOnBigPrize: true
-    });
-    check('通知关着也能停在第 2 抽', quiet.state.draws === 2, `实际 ${quiet.state.draws}`);
-    await quiet.close();
-
-    // 门槛之下的不算大奖，不该停
-    const small = await startSite({
-        prizes: ['魔力 5000 '], balance: 1000000
-    });
-    await runScript({
-        host: small.state.origin, draws: 3, interval: 0.3,
-        stopOnBigPrize: true, bigPrizeMinBeans: 780000
-    });
-    check('没到门槛的奖不触发停机', small.state.draws === 3, `实际 ${small.state.draws}`);
-    await small.close();
+    }));
+    const { out } = await runFile(file, dir);
+    check('旧总开关仍能让 780,000 停在第 2 抽', site.state.draws === 2,
+        `实际 ${site.state.draws}`);
+    const migrated = JSON.parse(fs.readFileSync(path.join(dir, 'hh_lottery.config.json'), 'utf8'));
+    check('配置文件补出两个新开关且都为 true',
+        migrated.stopOnVip === true && migrated.stopOn780k === true,
+        JSON.stringify({ stopOnVip: migrated.stopOnVip, stopOn780k: migrated.stopOn780k }));
+    check('迁移日志点明旧开关已拆分', /stopOnBigPrize.*stopOnVip.*stopOn780k/.test(out), out.slice(0, 700));
+    await site.close();
 }
 
 /* ---------------------------------------------------------------- */

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HHCLUB 自动抽奖 · 情绪价值拉满版
 // @namespace    http://tampermonkey.net/
-// @version      1.33.0
+// @version      1.34.0
 // @description  HHCLUB 自动抽奖增强版 · 分奖项中奖次数统计 · 一抽到底 · 实时余额 · 站内信清理
 // @author       Timqaq, JIEDIAO
 // @match        https://hhanclub.net/lucky.php
@@ -135,6 +135,8 @@
         jackpotMaxRate: 0.002,
         // 读不到奖池时的兜底判定：VIP，或单笔十万以上的憨豆
         jackpotBeansFloor: 100000,
+        // 「中奖就停」里的固定憨豆档位；只认这一档，不按大于等于判断
+        stopBeansValue: 780000,
         // 读不到站点公布的折算金额时用这个兜底
         vipSwapFallbackBeans: 1000000,
         /* 判定折算的主证据是余额：站点真发了那笔憨豆，账面必然多出接近
@@ -239,7 +241,8 @@
         detailOpen: 'none',
         drainMode: false,
         reserveBeans: 0,
-        stopOnJackpot: false,
+        stopOnVip: false,
+        stopOn780k: false,
         autoCleanMail: false,
         mailPageSizePrompted: false,
         panelLeft: null,
@@ -576,12 +579,26 @@
     ========================================================= */
 
     function loadSettings() {
+        let stored = {};
         try {
             const raw = localStorage.getItem(SETTINGS_KEY);
-            if (raw) Object.assign(settings, JSON.parse(raw));
+            if (raw) {
+                stored = JSON.parse(raw);
+                Object.assign(settings, stored);
+            }
         } catch (error) {
             console.error('HHCLUB 读取设置失败:', error);
         }
+
+        // 老版本只有一个「中大奖就停」总开关。用户明确开过时，两类都沿用；
+        // 只要新开关里已有任意一项，就以新配置为准，不再覆盖用户选择。
+        const hasVipOption = Object.prototype.hasOwnProperty.call(stored, 'stopOnVip');
+        const has780kOption = Object.prototype.hasOwnProperty.call(stored, 'stopOn780k');
+        if (!hasVipOption && !has780kOption && stored.stopOnJackpot === true) {
+            settings.stopOnVip = true;
+            settings.stopOn780k = true;
+        }
+        delete settings.stopOnJackpot;
 
         // 存下来的值可能来自旧版本、别的合法区间，或者被手改过。
         // 不在这里收敛的话，输入框会显示一个和实际生效值不一样的数字。
@@ -592,8 +609,8 @@
         if (settings.viewMode !== 'total') settings.viewMode = 'current';
         if (settings.detailOpen !== 'all') settings.detailOpen = 'none';
         settings.animation = settings.animation !== false;
-        // 这个默认关：挂机的人多半不希望半夜被一注 780,000 停在那儿
-        settings.stopOnJackpot = settings.stopOnJackpot === true;
+        settings.stopOnVip = settings.stopOnVip === true;
+        settings.stopOn780k = settings.stopOn780k === true;
     }
 
     function saveSettings() {
@@ -913,6 +930,15 @@
             || (prize.type === 'beans' && prize.value >= CONFIG.jackpotBeansFloor);
     }
 
+    /* 停止条件和「大奖」展示口径分开：VIP 折算仍属于 VIP，780,000
+       则只认普通憨豆的精确档位，不能被 1,000,000 等更高档误触发。 */
+    function shouldStopForPrize(prize) {
+        return (settings.stopOnVip && prize.type === 'vip')
+            || (settings.stopOn780k
+                && prize.type === 'beans'
+                && prize.value === CONFIG.stopBeansValue);
+    }
+
     /* =========================================================
        记录一次抽奖
 
@@ -1055,8 +1081,12 @@
 
         // 开着「中奖即停」的时候，抽完这一注就收工 —— 但真正停在
         // runSingleDraw 那边做，VIP 折算之类的后续还得跑完
-        const willStop = jackpot && running && settings.stopOnJackpot;
-        if (willStop) pendingJackpotStop = String(prizeText).trim();
+        const willStop = running && shouldStopForPrize(prize);
+        if (willStop) {
+            pendingJackpotStop = prize.type === 'vip'
+                ? 'VIP（含折算）'
+                : `${fmt(CONFIG.stopBeansValue)} 憨豆`;
+        }
 
         if (jackpot) addLog(`👑 大奖！${prizeText}`, 'success');
         if (settings.animation) {
@@ -2192,12 +2222,18 @@
 
                 <div class="hh-drain">
                     <label class="hh-drain-toggle">
-                        <input type="checkbox" id="stop-on-jackpot">
-                        <span>🏆 中大奖就停</span>
+                        <input type="checkbox" id="stop-on-vip">
+                        <span>🏆 VIP（含折算）就停</span>
+                    </label>
+                </div>
+                <div class="hh-drain">
+                    <label class="hh-drain-toggle">
+                        <input type="checkbox" id="stop-on-780k">
+                        <span>🏆 ${fmt(CONFIG.stopBeansValue)} 憨豆就停</span>
                     </label>
                 </div>
                 <div id="jackpot-stop-hint" class="hh-drain-hint">
-                    抽中 VIP 或 ${fmt(CONFIG.jackpotBeansFloor)} 憨豆以上就收手，留着现场对账、截图
+                    两项可独立勾选；VIP 已折算成憨豆仍只按 VIP 判断，憨豆项只认 ${fmt(CONFIG.stopBeansValue)} 这一档
                 </div>
 
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-top:7px;">
@@ -3112,7 +3148,7 @@
                     await calibrateBalance({ quiet: true });
                 }
 
-                stopLottery(`🏆 抽到大奖，已按设置停止 · ${text}`);
+                stopLottery(`🏆 命中 ${text}，已按设置停止抽奖`);
                 return;
             }
 
@@ -4280,8 +4316,14 @@
             applyMailUI();
         });
 
-        on('stop-on-jackpot', 'change', event => {
-            settings.stopOnJackpot = event.target.checked;
+        on('stop-on-vip', 'change', event => {
+            settings.stopOnVip = event.target.checked;
+            saveSettings();
+            applyJackpotStopUI();
+        });
+
+        on('stop-on-780k', 'change', event => {
+            settings.stopOn780k = event.target.checked;
             saveSettings();
             applyJackpotStopUI();
         });
@@ -4357,8 +4399,11 @@
         const mailToggle = $('auto-clean-mail');
         if (mailToggle) mailToggle.checked = !!settings.autoCleanMail;
 
-        const jackpotStopToggle = $('stop-on-jackpot');
-        if (jackpotStopToggle) jackpotStopToggle.checked = !!settings.stopOnJackpot;
+        const stopVipToggle = $('stop-on-vip');
+        if (stopVipToggle) stopVipToggle.checked = !!settings.stopOnVip;
+
+        const stop780kToggle = $('stop-on-780k');
+        if (stop780kToggle) stop780kToggle.checked = !!settings.stopOn780k;
 
         applyDurationUI();
         applyDrainUI();
@@ -4413,7 +4458,7 @@
     }
 
     function applyJackpotStopUI() {
-        $('jackpot-stop-hint')?.classList.toggle('is-on', !!settings.stopOnJackpot);
+        $('jackpot-stop-hint')?.classList.toggle('is-on', !!(settings.stopOnVip || settings.stopOn780k));
     }
 
     function init() {

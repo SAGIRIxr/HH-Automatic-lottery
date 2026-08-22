@@ -70,14 +70,13 @@ const CONFIG = {
           挂机跑一晚上的话，中了大奖当场就能知道 */
     notifyBigPrize: true,
 
-    /* ⑪ 多少憨豆算大奖。填 0 就只有 VIP 才推。
-          这个门槛同时管着下面的 stopOnBigPrize */
+    /* ⑪ 多少憨豆算大奖通知。填 0 就只有 VIP 才推。 */
     bigPrizeMinBeans: 780000,
 
-    /* ⑪.5 中了大奖就收工，这一轮剩下的次数不抽了。
-           想在中奖那一刻把余额和记录定住、回头慢慢对账的话打开它。
-           跟 notifyBigPrize 是两回事：通知关着，这个照样能停 */
-    stopOnBigPrize: false,
+    /* ⑪.5 两种停止条件独立开关。VIP 已折算成憨豆仍按 VIP 判断；
+           780,000 只认普通憨豆的精确档位，不包含 1,000,000 等其他档。 */
+    stopOnVip: false,
+    stopOn780k: false,
 
     /* ⑫ 定时播报战报。默认关着 —— 跑一轮就推一条收尾通知已经够用了，
           想要中途也播报再打开。开了之后每隔 periodicMinutes 分钟推一次
@@ -224,9 +223,8 @@ function normalizeConfig() {
     CONFIG.cleanMail = CONFIG.cleanMail === true;
     CONFIG.notifyBigPrize = CONFIG.notifyBigPrize !== false;
     CONFIG.bigPrizeMinBeans = int(CONFIG.bigPrizeMinBeans, 780000, 0);
-    CONFIG.stopOnBigPrize = CONFIG.stopOnBigPrize === true;
-    // 这个是默认关的，得显式打开 —— 和 notifyBigPrize 那种默认开的不一样，
-    // 别照着抄成 !== false
+    CONFIG.stopOnVip = CONFIG.stopOnVip === true;
+    CONFIG.stopOn780k = CONFIG.stopOn780k === true;
     CONFIG.notifyPeriodic = CONFIG.notifyPeriodic === true;
     CONFIG.periodicMinutes = float(CONFIG.periodicMinutes, 30, 0);
     if (CONFIG.periodicMinutes <= 0) CONFIG.notifyPeriodic = false;
@@ -272,15 +270,25 @@ function loadExternalConfig() {
     }
     if (!data || typeof data !== 'object') return '';
 
+    const persisted = { ...data };
+    const hasVipOption = Object.prototype.hasOwnProperty.call(data, 'stopOnVip');
+    const has780kOption = Object.prototype.hasOwnProperty.call(data, 'stopOn780k');
+    if (!hasVipOption && !has780kOption && data.stopOnBigPrize === true) {
+        CONFIG.stopOnVip = true;
+        CONFIG.stopOn780k = true;
+        log('📝 旧配置 stopOnBigPrize=true 已迁移为 stopOnVip=true、stopOn780k=true');
+    }
+    delete persisted.stopOnBigPrize;
+
     const unknown = [];
-    Object.entries(data).forEach(([key, value]) => {
+    Object.entries(persisted).forEach(([key, value]) => {
         if (key === '//') return;
         if (Object.prototype.hasOwnProperty.call(CONFIG, key)) CONFIG[key] = value;
         else unknown.push(key);
     });
     if (unknown.length) log(`⚠️ ${CONFIG_FILE} 里有认不出的项，已忽略：${unknown.join(', ')}`);
 
-    const added = backfillConfigFile(file, data);
+    const added = backfillConfigFile(file, persisted);
     if (added.length) {
         log(`📝 ${CONFIG_FILE} 补上了新版本才有的项：${added.join(', ')}`);
         log('   新项已按当前版本默认值启用；不想用的开关可直接在配置文件里关闭');
@@ -1016,8 +1024,7 @@ class Lottery {
     /* 挂机跑一晚上，中了大奖当场推一条 —— 不然要等跑完才知道。
        口径和油猴版的全屏庆祝一致：VIP，或单笔憨豆到门槛。
        推送失败不能影响抽奖，吞掉就是了。 */
-    /* 算不算大奖。通知和「中奖就停」共用一个口径 —— 两处各写一遍的话，
-       哪天改了门槛只改一处，就会出现推了通知却不停、或者反过来。 */
+    /* 大奖通知保留可配置门槛，和停止条件互不影响。 */
     isBigPrize(prize) {
         return prize.type === 'vip'
             || (CONFIG.bigPrizeMinBeans > 0
@@ -1025,7 +1032,12 @@ class Lottery {
                 && prize.value >= CONFIG.bigPrizeMinBeans);
     }
 
-    async pushBigPrize(prize, prizeText) {
+    shouldStopForPrize(prize) {
+        return (CONFIG.stopOnVip && prize.type === 'vip')
+            || (CONFIG.stopOn780k && prize.type === 'beans' && prize.value === 780000);
+    }
+
+    async pushBigPrize(prize, prizeText, willStop = false) {
         if (!CONFIG.notifyBigPrize) return;
         if (!this.isBigPrize(prize)) return;
 
@@ -1063,7 +1075,7 @@ class Lottery {
             `  🚀 净盈亏：${profit >= 0 ? '+' : ''}${fmt(profit)}（${rate >= 0 ? '+' : ''}${rate.toFixed(1)}%）`,
             `  💰 当前余额：${fmt(this.balance)} 憨豆`,
             '━━━━━━━━━━━━━━━━━━━',
-            CONFIG.stopOnBigPrize ? '🛑 已按设置停止本轮抽奖' : '🌟 后台持续挂机抽奖中'
+            willStop ? '🛑 已按设置停止本轮抽奖' : '🌟 后台持续挂机抽奖中'
         ].join('\n');
 
         try {
@@ -1247,13 +1259,15 @@ class Lottery {
                 log(`🎲 第 ${this.current.draws} 抽：${prizeText.trim()} · 余额 ${fmt(this.balance)}`);
 
                 if (prize.type === 'vip') await this.reconcileVip(prize);
-                await this.pushBigPrize(prize, prizeText);
+                const willStop = this.shouldStopForPrize(prize);
+                await this.pushBigPrize(prize, prizeText, willStop);
 
                 /* 中了大奖就收工。放在 VIP 折算和通知之后 —— 那两件事
                    得先办完，不然这一注的账记不齐、通知也发不出去。 */
-                if (CONFIG.stopOnBigPrize && this.isBigPrize(prize)) {
-                    this.stopReason = `中了大奖（${prizeText.trim()}），按设置停止`;
-                    report(`🏆 中了大奖：${prizeText.trim()} · 按设置停止本轮`);
+                if (willStop) {
+                    const stopPrize = prize.type === 'vip' ? 'VIP（含折算）' : '780,000 憨豆';
+                    this.stopReason = `命中停止条件（${stopPrize}），按设置停止`;
+                    report(`🏆 命中 ${prizeText.trim()}（停止项：${stopPrize}） · 按设置停止本轮`);
                     break;
                 }
 

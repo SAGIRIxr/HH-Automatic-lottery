@@ -121,7 +121,8 @@ const CONFIG = {
 
     notifyBigPrize: true,      // ⑩ 中了大奖当场推一条
     bigPrizeMinBeans: 780000,  // ⑪ 多少憨豆算大奖，填 0 就只有 VIP 才推
-    stopOnBigPrize: false,     // ⑪.5 中了大奖就收工，这一轮剩下的不抽了
+    stopOnVip: false,          // ⑪.5 中 VIP（含折算）就收工
+    stopOn780k: false,         // ⑪.6 中 780,000 憨豆这一档就收工
     notifyPeriodic: false,     // ⑫ 定时播报战报，默认关
     periodicMinutes: 30,       // ⑬ 定时战报推送间隔（分钟），0 = 关闭
 
@@ -148,8 +149,9 @@ const CONFIG = {
 | `cleanMail` | `false` | 清掉「幸运大转盘 中奖通知」站内信：抽奖途中每 25 抽一次，收尾再翻一遍整个收件箱 |
 | `statsFile` | `hh_lottery_stats.json` | 统计存到哪个文件，相对路径按脚本所在目录算。留空 `''` 就是不记 |
 | `notifyBigPrize` | `true` | 中了大奖（VIP，或单笔憨豆到下面的门槛）当场推一条，不用等跑完 |
-| `bigPrizeMinBeans` | `780000` | 多少憨豆算大奖。填 `0` 就只有 VIP 才推。这个门槛同时管着下面的 `stopOnBigPrize` |
-| `stopOnBigPrize` | `false` | 中了大奖就收工，这一轮剩下的次数不抽了。想把余额和记录定在中奖那一刻、回头慢慢对账就打开。和 `notifyBigPrize` 各管各的，通知关着这个照样能停 |
+| `bigPrizeMinBeans` | `780000` | 多少憨豆算大奖通知。填 `0` 就只有 VIP 才推；不影响下面两个停止开关 |
+| `stopOnVip` | `false` | 中 VIP 就收工。已是 VIP 而被站点折算成憨豆的中奖仍命中此项，并在折算核对完成后停止 |
+| `stopOn780k` | `false` | 中普通憨豆的 `780000` 精确档位就收工；不包含 1,000,000 等其他憨豆档位 |
 | `notifyPeriodic` | `false` | 定时推送战报。**默认关着** —— 跑一轮推一条收尾通知已经够用，挂机长跑想中途也收到播报再改成 `true` |
 | `periodicMinutes` | `30` | 定时战报推送间隔（分钟）。填 `0` 为关闭定时播报。别填得比 `maxMinutes` 还大 —— 一轮跑完都没到播报点，等于白开，脚本启动时会提醒你 |
 | `tgBotToken` / `tgUserId` | 空 | Telegram 直推。**青龙里已经配过 TG 推送的话别填**，青龙的 `sendNotify` 会推一条，这里再推就是重复。只认填在这儿的值，不读青龙的环境变量 |

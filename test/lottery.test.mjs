@@ -3369,11 +3369,9 @@ console.log('\n[69] 重复导入同一份记录会被认出来');
 }
 
 /* ---------------------------------------------------------------- */
-console.log('\n[70] 中大奖就停：开关关着照抽，开着就收手');
+console.log('\n[70] 中奖就停：VIP 与 780,000 憨豆是两个独立复选项');
 {
-    // 第 2 抽给 780,000，后面全是小奖 —— 停没停一眼就看得出来
-    const texts = ['魔力 100 ', '魔力 780000 ', '魔力 100 ', '魔力 100 ', '魔力 100 '];
-    const stubFetch = w => {
+    const stubFetch = (w, texts) => {
         let i = 0;
         w.fetch = async url => {
             if (String(url).includes('lucky.php')) {
@@ -3388,90 +3386,90 @@ console.log('\n[70] 中大奖就停：开关关着照抽，开着就收手');
         };
     };
 
-    /* --- 默认关着：中了也接着抽 --- */
+    const startFive = (d, w) => {
+        d.getElementById('lottery-interval').value = '0.3';
+        d.getElementById('max-lottery-count').value = '5';
+        d.getElementById('start-lottery').click();
+        return untilStopped(d, 30000).then(() => sleep(200));
+    };
+    const setOption = (input, checked, w) => {
+        if (!input) return;
+        input.checked = checked;
+        input.dispatchEvent(new w.Event('change'));
+    };
+
+    /* --- 两项默认都关着：中了也接着抽 --- */
     const domA = makeDom({ pool: REAL_POOL, useBean: '每次消耗憨豆： 2000' });
-    stubFetch(domA.window);
+    stubFetch(domA.window, ['魔力 100 ', '魔力 780000 ', '魔力 100 ', '魔力 100 ', '魔力 100 ']);
     await run(domA);
     const a = domA.window.document;
 
-    const toggle = a.getElementById('stop-on-jackpot');
-    check('面板上有「中大奖就停」这个开关', !!toggle);
-    check('默认是关着的', toggle && toggle.checked === false, String(toggle?.checked));
+    const defaultVip = a.getElementById('stop-on-vip');
+    const default780k = a.getElementById('stop-on-780k');
+    check('面板上有 VIP（含折算）复选项', !!defaultVip);
+    check('面板上有 780,000 憨豆复选项', !!default780k);
+    check('两项默认都关着', defaultVip?.checked === false && default780k?.checked === false,
+        `${defaultVip?.checked} / ${default780k?.checked}`);
 
-    a.getElementById('lottery-interval').value = '0.3';
-    a.getElementById('max-lottery-count').value = '5';
-    a.getElementById('start-lottery').click();
-    await untilStopped(a, 30000);
-    await sleep(200);
+    await startFive(a, domA.window);
 
     let stats = JSON.parse(domA.window.localStorage.getItem('hhanclub_lottery_stats_v4'));
-    check('开关关着：780,000 之后照抽满 5 抽', stats.draws === 5, `实际 ${stats.draws}`);
+    check('两项都关着：780,000 之后照抽满 5 抽', stats.draws === 5, `实际 ${stats.draws}`);
     check('关着的时候全屏庆祝还是说「抽奖没停」',
         /抽奖没停/.test(a.querySelector('.hh-jackpot-hint')?.textContent || ''),
         a.querySelector('.hh-jackpot-hint')?.textContent);
 
-    /* --- 打开开关：抽到大奖那一注就收手 --- */
+    /* --- 只勾 780,000：先来的 VIP 不停，到 780,000 才停 --- */
     const domB = makeDom({ pool: REAL_POOL, useBean: '每次消耗憨豆： 2000' });
-    stubFetch(domB.window);
+    stubFetch(domB.window, ['VIP 7 Day(s)', '魔力 780000 ', '魔力 100 ', '魔力 100 ', '魔力 100 ']);
     await run(domB);
     const b = domB.window.document;
 
-    const on = b.getElementById('stop-on-jackpot');
-    on.checked = true;
-    on.dispatchEvent(new domB.window.Event('change'));
+    setOption(b.getElementById('stop-on-780k'), true, domB.window);
     await sleep(50);
 
     const saved = JSON.parse(domB.window.localStorage.getItem('hhanclub_lottery_settings_v1'));
-    check('开关状态存下来了', saved.stopOnJackpot === true, JSON.stringify(saved.stopOnJackpot));
+    check('两个复选项分别持久化', saved.stopOnVip === false && saved.stopOn780k === true,
+        JSON.stringify({ stopOnVip: saved.stopOnVip, stopOn780k: saved.stopOn780k }));
 
-    b.getElementById('lottery-interval').value = '0.3';
-    b.getElementById('max-lottery-count').value = '5';
-    b.getElementById('start-lottery').click();
-    await untilStopped(b, 30000);
-    await sleep(200);
+    await startFive(b, domB.window);
 
     stats = JSON.parse(domB.window.localStorage.getItem('hhanclub_lottery_stats_v4'));
-    check('停在第 2 抽 —— 第 1 抽的小奖没触发停机', stats.draws === 2, `实际 ${stats.draws}`);
-    check('大奖本身记下来了', stats.jackpots.length === 1,
+    check('只勾 78 万：第 1 抽 VIP 不停，第 2 抽 78 万才停', stats.draws === 2, `实际 ${stats.draws}`);
+    check('两笔大奖本身都记下来了', stats.jackpots.length === 2,
         JSON.stringify(stats.jackpots.map(x => x.text)));
     check('面板显示已停止', b.getElementById('lottery-status').textContent === '已停止',
         b.getElementById('lottery-status').textContent);
-    check('日志说清了是因为中大奖才停的',
-        /抽到大奖，已按设置停止/.test(b.getElementById('lottery-log').textContent),
+    check('日志说清了是命中 780,000 才停的',
+        /780,000.*已按设置停止/.test(b.getElementById('lottery-log').textContent),
         b.getElementById('lottery-log').textContent.slice(-300));
     check('全屏庆祝里的那句话跟着换了',
         /已按设置停止抽奖/.test(b.querySelector('.hh-jackpot-hint')?.textContent || ''),
         b.querySelector('.hh-jackpot-hint')?.textContent);
 
-    /* --- VIP 也算大奖，而且要等折算核完再停 --- */
+    /* --- 只勾 VIP：先来的 780,000 不停，到 VIP 才停 --- */
     const domC = makeDom({ pool: REAL_POOL, useBean: '每次消耗憨豆： 2000' });
-    let n = 0;
-    domC.window.fetch = async url => {
-        if (String(url).includes('lucky.php') || String(url).includes('userdetails')) {
-            return { ok: true, status: 200, text: async () => '<html><body></body></html>' };
-        }
-        return {
-            ok: true, status: 200,
-            text: async () => JSON.stringify({
-                ret: 0, data: { prize_text: n++ === 0 ? '魔力 100 ' : 'VIP 7 Day(s)' }
-            })
-        };
-    };
+    stubFetch(domC.window, ['魔力 780000 ', 'VIP 7 Day(s)', '魔力 100 ', '魔力 100 ', '魔力 100 ']);
     await run(domC);
     const c = domC.window.document;
-    c.getElementById('stop-on-jackpot').checked = true;
-    c.getElementById('stop-on-jackpot').dispatchEvent(new domC.window.Event('change'));
-    c.getElementById('lottery-interval').value = '0.3';
-    c.getElementById('max-lottery-count').value = '5';
-    c.getElementById('start-lottery').click();
-    await untilStopped(c, 30000);
-    await sleep(200);
+    setOption(c.getElementById('stop-on-vip'), true, domC.window);
+    await startFive(c, domC.window);
 
     stats = JSON.parse(domC.window.localStorage.getItem('hhanclub_lottery_stats_v4'));
-    check('VIP 也算大奖，停在第 2 抽', stats.draws === 2, `实际 ${stats.draws}`);
-    check('这一注 VIP 记上了才停的 —— 折算核对没被停机截断',
+    check('只勾 VIP：第 1 抽 78 万不停，第 2 抽 VIP 才停', stats.draws === 2, `实际 ${stats.draws}`);
+    check('这一注 VIP 记上了才停',
         stats.prizes.vip && stats.prizes.vip.count === 1,
         JSON.stringify(stats.prizes.vip));
+
+    /* --- 旧版总开关开启过：升级后迁移为两项都勾上 --- */
+    const domD = makeDom({ pool: REAL_POOL });
+    domD.window.localStorage.setItem('hhanclub_lottery_settings_v1', JSON.stringify({ stopOnJackpot: true }));
+    await run(domD);
+    const d = domD.window.document;
+    check('旧 stopOnJackpot=true 迁移为两项都开启',
+        d.getElementById('stop-on-vip')?.checked === true
+        && d.getElementById('stop-on-780k')?.checked === true,
+        `${d.getElementById('stop-on-vip')?.checked} / ${d.getElementById('stop-on-780k')?.checked}`);
 }
 
 /* ---------------------------------------------------------------- */
@@ -3580,8 +3578,11 @@ console.log('\n[72] 中大奖停机前先把余额校准回来');
 
     await run(dom);
     const d = w.document;
-    d.getElementById('stop-on-jackpot').checked = true;
-    d.getElementById('stop-on-jackpot').dispatchEvent(new w.Event('change'));
+    const stop780k = d.getElementById('stop-on-780k');
+    if (stop780k) {
+        stop780k.checked = true;
+        stop780k.dispatchEvent(new w.Event('change'));
+    }
     d.getElementById('lottery-interval').value = '0.3';
     d.getElementById('max-lottery-count').value = '10';
 
