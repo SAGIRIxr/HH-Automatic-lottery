@@ -3105,7 +3105,7 @@
         if (!result.success || !result.parsed) {
             errorStreak++;
             quickRetryMs = stepBackoffMs(errorStreak, CONFIG.errorRetryMs);
-            addLog(`❌ 请求失败：${result.error || result.status || '未知错误'}`
+            addLog(`❌ ${describeDrawFailure(result)}`
                 + ` · ${intervalText(quickRetryMs / 1000)} 秒后再试`, 'error');
             noteStuck(errorStreak, '请求失败');
             return;
@@ -3196,6 +3196,26 @@
         quickRetryMs = stepBackoffMs(errorStreak, CONFIG.errorRetryMs);
         addLog(`❌ ${msg} · ${intervalText(quickRetryMs / 1000)} 秒后再试`, 'error');
         noteStuck(errorStreak, '接口报错');
+    }
+
+    /* 这一枪到底是怎么失败的。以前一律报 status，站点把登录页当 200 返回时
+       日志上只有一句「请求失败：200」，看不出是掉线了。现在不再因失败次数
+       停机，会一直重试下去，这条日志更得说人话。 */
+    function describeDrawFailure(result) {
+        if (result.error) return `请求失败：${result.error}`;
+        if (result.status === 401 || result.status === 403) {
+            return '请求被拒（登录多半已经失效）';
+        }
+        if (!result.success) return `请求失败：HTTP ${result.status}`;
+
+        // HTTP 200 但不是 JSON —— 登录页、维护页、人机验证都长这样
+        const body = String(result.data || '');
+        if (/<html/i.test(body)) {
+            return /takelogin|login\.php|请登录|登录后/i.test(body)
+                ? '站点回的是登录页 —— 登录已失效，去页面上重新登一下再抽'
+                : '站点没返回 JSON（维护页或人机验证？）';
+        }
+        return `站点返回了认不出的内容（HTTP ${result.status}）`;
     }
 
     /* 连续失败第 streak 次该等多久。每 retryStepEvery 次抬一档：

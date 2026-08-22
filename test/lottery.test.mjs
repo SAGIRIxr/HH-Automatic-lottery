@@ -3601,5 +3601,79 @@ console.log('\n[72] 中大奖停机前先把余额校准回来');
 }
 
 /* ---------------------------------------------------------------- */
+console.log('\n[73] 掉线了要说是掉线，不能只报一句「请求失败：200」');
+{
+    /* 站点掉登录时会拿 HTTP 200 回一张登录页。既然现在永不停机、
+       会一直重试下去，日志就更得说清卡在哪儿 —— 不然人回来只看到
+       满屏「请求失败：200」，根本不知道是要去重新登录。 */
+    const dom = makeDom({ pool: REAL_POOL, useBean: '每次消耗憨豆： 2000' });
+    const w = dom.window;
+
+    w.fetch = async url => {
+        if (String(url).includes('lucky.php')) {
+            return { ok: true, status: 200, text: async () => '<html><body></body></html>' };
+        }
+        return {
+            ok: true, status: 200,
+            text: async () => '<html><body><form action="takelogin.php">'
+                + '<input name="username"></form></body></html>'
+        };
+    };
+
+    await run(dom);
+    const d = w.document;
+    d.getElementById('lottery-interval').value = '0.3';
+    d.getElementById('max-lottery-count').value = '10';
+    d.getElementById('start-lottery').click();
+
+    await until(() => /登录/.test(d.getElementById('lottery-log').textContent), 8000);
+
+    const log = d.getElementById('lottery-log').textContent;
+    check('点明了是登录失效，不是干巴巴一句 200',
+        /登录已失效/.test(log), log.slice(-300));
+    check('还告诉人该去干什么', /重新登/.test(log), log.slice(-300));
+    check('没有再出现没头没脑的「请求失败：200」',
+        !/请求失败：200/.test(log), log.slice(-300));
+    check('照旧不停机，接着重试',
+        d.getElementById('lottery-status').textContent !== '已停止',
+        d.getElementById('lottery-status').textContent);
+
+    d.getElementById('stop-lottery').click();
+    await untilStopped(d, 5000);
+}
+
+/* ---------------------------------------------------------------- */
+console.log('\n[74] 站点回的不是登录页时，也别乱猜成掉线');
+{
+    const dom = makeDom({ pool: REAL_POOL, useBean: '每次消耗憨豆： 2000' });
+    const w = dom.window;
+
+    w.fetch = async url => {
+        if (String(url).includes('lucky.php')) {
+            return { ok: true, status: 200, text: async () => '<html><body></body></html>' };
+        }
+        return {
+            ok: true, status: 200,
+            text: async () => '<html><body><h1>系统维护中</h1></body></html>'
+        };
+    };
+
+    await run(dom);
+    const d = w.document;
+    d.getElementById('lottery-interval').value = '0.3';
+    d.getElementById('max-lottery-count').value = '10';
+    d.getElementById('start-lottery').click();
+
+    await until(() => /没返回 JSON/.test(d.getElementById('lottery-log').textContent), 8000);
+
+    const log = d.getElementById('lottery-log').textContent;
+    check('说的是没拿到 JSON，没硬扣一顶「登录失效」的帽子',
+        /没返回 JSON/.test(log) && !/登录已失效/.test(log), log.slice(-300));
+
+    d.getElementById('stop-lottery').click();
+    await untilStopped(d, 5000);
+}
+
+/* ---------------------------------------------------------------- */
 console.log(`\n=========== ${passed} passed, ${failed} failed ===========\n`);
 process.exit(failed ? 1 : 0);
