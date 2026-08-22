@@ -1806,6 +1806,13 @@
     font-size: 11px;
     color: #c06a20;
 }
+/* 「看着像」而已，别摆出和铁证一样的脸色 */
+.hh-modal-warn.is-soft {
+    border-color: #dcd2c4;
+    background: #faf7f2;
+    color: #8a705a;
+}
+.hh-modal-warn.is-soft b { color: #6f5a44; }
 .hh-modal-btn {
     display: block;
     width: 100%;
@@ -3096,6 +3103,15 @@
             if (pendingJackpotStop) {
                 const text = pendingJackpotStop;
                 pendingJackpotStop = null;
+
+                /* 收工前拿一次权威余额 —— 开这个功能本来就是为了停在中奖
+                   那一刻对账，面板上摆个本地估算说不过去。
+                   VIP 那一注刚才折算核对时已经校准过，这里就跳过了。 */
+                if (drawsSinceCalibration > 0) {
+                    await waitForCalibrationSlot();
+                    await calibrateBalance({ quiet: true });
+                }
+
                 stopLottery(`🏆 抽到大奖，已按设置停止 · ${text}`);
                 return;
             }
@@ -3405,7 +3421,9 @@
 
     /* 完整备份。和 CSV 不同：CSV 是给表格看的，这份是能原样导回来的。 */
     function backupStats() {
-        const total = loadStats();
+        // 一抽都没抽过时 loadStats() 返回的是没落过盘的空统计，编号也是空的。
+        // 在这儿补上，这份备份才带得走记录线
+        const total = stampOrigin(loadStats());
         const payload = {
             kind: 'hhclub-lottery-backup',
             version: 4,
@@ -3472,7 +3490,10 @@
         [...result.imports, ...other.imports].forEach(item => {
             ledger.set(`${item.exportId || ''}|${item.originId || ''}`, item);
         });
-        result.imports = [...ledger.values()].slice(-CONFIG.importLedgerLimit);
+        // 台账满了要扔的是最旧的那批，所以先按时间排一遍再截
+        result.imports = [...ledger.values()]
+            .sort((a, b) => (a.at || 0) - (b.at || 0))
+            .slice(-CONFIG.importLedgerLimit);
 
         const firsts = [base?.firstAt, extra?.firstAt].filter(Boolean);
         if (firsts.length) result.firstAt = Math.min(...firsts);
@@ -3503,6 +3524,7 @@
         if (seen) {
             const when = seen.at ? new Date(seen.at).toLocaleString('zh-CN') : '之前';
             return {
+                sure: true,
                 title: '这个文件已经合并过一次了',
                 detail: `${when} 并进来过同一份备份。再合一次，里面每一抽都会被算两遍。`
             };
@@ -3511,6 +3533,7 @@
         const mine = lineageOf(existing);
         if ([...lineageOf(incoming)].some(id => mine.has(id))) {
             return {
+                sure: true,
                 title: '两份记录同源',
                 detail: '这份备份和当前历史出自同一条记录线（同一台设备，'
                     + '或者两边互相导过），重叠的部分合并后会被算两遍。'
@@ -3523,6 +3546,7 @@
         const hit = (incoming.jackpots || []).filter(item => stamps.has(`${item.at}|${item.text}`));
         if (hit.length) {
             return {
+                sure: true,
                 title: `有 ${hit.length} 条大奖记录跟当前历史完全重合`,
                 detail: '同一毫秒中同一个奖不会是巧合，这两份记录是重叠的。'
             };
@@ -3532,9 +3556,14 @@
         if (incoming.draws > 0 && existing.draws >= incoming.draws
             && incoming.firstAt && incoming.lastAt && existing.firstAt && existing.lastAt
             && incoming.firstAt >= existing.firstAt && incoming.lastAt <= existing.lastAt) {
+            /* 这一条只是「看着像」，不是证据 —— 两个人在同一段时间里各刷各的，
+               抽得少的那份区间自然被罩住。所以 sure 留 false：提醒一句，
+               但不去动推荐项，免得把正常的跨设备合并劝退了。 */
             return {
+                sure: false,
                 title: '看着像是同一批记录的旧快照',
                 detail: '这份备份的时间区间整个落在当前历史里，抽数也不比现在多。'
+                    + '要是确实来自另一个号 / 另一个人，那就是巧合，合并没问题。'
             };
         }
         return null;
@@ -3549,7 +3578,9 @@
        旧快照推「取消」（当前历史已经含着它了，什么都不用做）。 */
     function askImportMode(drawCount, currentCount, overlap) {
         return new Promise(resolve => {
-            const recommend = !overlap ? 'merge'
+            // 只有拿得出证据的重叠才动推荐项；「看着像」的那种提醒一句就够了
+            const proven = !!overlap?.sure;
+            const recommend = !proven ? 'merge'
                 : (drawCount > currentCount ? 'replace' : 'cancel');
             const cls = mode => `hh-modal-btn${mode === recommend ? ' hh-modal-primary' : ''}`;
 
@@ -3559,8 +3590,8 @@
                 <div class="hh-modal">
                     <div class="hh-modal-title">📥 导入备份</div>
                     ${overlap ? `
-                    <div class="hh-modal-warn">
-                        <b>⚠️ ${overlap.title}</b>
+                    <div class="hh-modal-warn${proven ? '' : ' is-soft'}">
+                        <b>${proven ? '⚠️' : 'ℹ️'} ${overlap.title}</b>
                         ${overlap.detail}
                     </div>` : ''}
                     <div class="hh-modal-text">
@@ -3569,13 +3600,15 @@
                     </div>
                     <button class="${cls('merge')}" data-mode="merge">
                         合并 · 共 ${fmt(drawCount + currentCount)} 抽
-                        <span>${overlap
+                        <span>${proven
                             ? '⚠️ 重叠的那部分会被算两遍，确认不是重复导入再选'
-                            : '换设备用这个，两边记录相加'}</span>
+                            : (overlap
+                                ? '确认这两份记录不重叠再合'
+                                : '换设备用这个，两边记录相加')}</span>
                     </button>
                     <button class="${cls('replace')}" data-mode="replace">
                         覆盖 · 只留 ${fmt(drawCount)} 抽
-                        <span>${overlap && drawCount > currentCount
+                        <span>${proven && drawCount > currentCount
                             ? '同源的新快照选这个，不会重复计算'
                             : '丢掉当前历史，只保留备份里的'}</span>
                     </button>

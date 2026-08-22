@@ -3475,5 +3475,130 @@ console.log('\n[70] 中大奖就停：开关关着照抽，开着就收手');
 }
 
 /* ---------------------------------------------------------------- */
+console.log('\n[71] 只是「看着像」的重叠，提醒一句就够，别把正常合并劝退');
+{
+    /* 两个人在同一段时间里各刷各的，抽得少的那份时间区间自然被罩住 ——
+       这不是证据。摆出和铁证一样的脸色，会把正常的跨设备合并劝退。 */
+    const dom = makeDom();
+    const w = dom.window;
+
+    const now = Date.now();
+    w.localStorage.setItem('hhanclub_lottery_stats_v4', JSON.stringify({
+        version: 4, draws: 5000, cost: 10000000,
+        gains: { beans: 9000000 },
+        prizes: { beans: { count: 5000, value: 9000000, tiers: { '500 憨豆': 5000 } } },
+        raw: { '魔力 500': 5000 },
+        jackpots: [],
+        firstAt: now - 90 * 86400000,
+        lastAt: now
+    }));
+
+    await run(dom);
+    const d = w.document;
+
+    const nativeCreate = d.createElement.bind(d);
+    let picker = null;
+    d.createElement = tag => {
+        const el = nativeCreate(tag);
+        if (tag === 'input') picker = el;
+        return el;
+    };
+    const openDialog = async json => {
+        picker = null;
+        d.getElementById('import-stats').click();
+        Object.defineProperty(picker, 'files', {
+            configurable: true,
+            get: () => [{ name: 'backup.json', text: async () => json }]
+        });
+        picker.dispatchEvent(new w.Event('change'));
+        await until(() => !!d.querySelector('.hh-modal-overlay'), 5000);
+        return d.querySelector('.hh-modal-overlay');
+    };
+
+    // 朋友的号：另一条记录线、没有重合的大奖，只是区间被罩住、抽数更少
+    const friend = JSON.stringify({
+        kind: 'hhclub-lottery-backup', version: 4,
+        originId: 'someone-else', exportId: 'someone-else-1',
+        total: {
+            version: 4, draws: 300, cost: 600000,
+            gains: { beans: 500000 },
+            prizes: { beans: { count: 300, value: 500000, tiers: { '500 憨豆': 300 } } },
+            raw: { '魔力 500': 300 },
+            jackpots: [],
+            firstAt: now - 60 * 86400000,
+            lastAt: now - 30 * 86400000
+        }
+    });
+
+    const dialog = await openDialog(friend);
+    const warn = dialog.querySelector('.hh-modal-warn');
+    check('还是提醒了一句', !!warn, dialog.textContent.replace(/\s+/g, ' ').slice(0, 200));
+    check('但用的是「看着像」那副软脸色',
+        warn.classList.contains('is-soft'), warn.className);
+    check('说清了也可能只是巧合',
+        /巧合/.test(warn.textContent), warn.textContent);
+    check('推荐项没被动，合并仍是主路径',
+        dialog.querySelector('[data-mode="merge"]').classList.contains('hh-modal-primary'));
+    check('也没摆出「会被算两遍」的吓人措辞',
+        !/算两遍/.test(dialog.querySelector('[data-mode="merge"]').textContent),
+        dialog.querySelector('[data-mode="merge"]').textContent);
+
+    dialog.querySelector('[data-mode="merge"]')
+        .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    await until(() => !d.querySelector('.hh-modal-overlay'), 5000);
+    check('合得进去，5,300 抽',
+        JSON.parse(w.localStorage.getItem('hhanclub_lottery_stats_v4')).draws === 5300,
+        JSON.parse(w.localStorage.getItem('hhanclub_lottery_stats_v4')).draws);
+}
+
+/* ---------------------------------------------------------------- */
+console.log('\n[72] 中大奖停机前先把余额校准回来');
+{
+    /* 开这个功能就是为了停在中奖那一刻对账，面板上摆个本地估算说不过去。 */
+    const dom = makeDom({ pool: REAL_POOL, useBean: '每次消耗憨豆： 2000' });
+    const w = dom.window;
+
+    let i = 0;
+    let calibrations = 0;
+    w.fetch = async url => {
+        if (String(url).includes('lucky.php')) {
+            calibrations++;
+            // 校准时回的页面把余额写成 999,999，和本地估算明显不同
+            return {
+                ok: true, status: 200,
+                text: async () => '<html><body><span class="bean-number">999999</span>'
+                    + '<span class="use-bean">每次消耗憨豆： 2000</span></body></html>'
+            };
+        }
+        return {
+            ok: true, status: 200,
+            text: async () => JSON.stringify({
+                ret: 0, data: { prize_text: i++ === 0 ? '魔力 100 ' : '魔力 780000 ' }
+            })
+        };
+    };
+
+    await run(dom);
+    const d = w.document;
+    d.getElementById('stop-on-jackpot').checked = true;
+    d.getElementById('stop-on-jackpot').dispatchEvent(new w.Event('change'));
+    d.getElementById('lottery-interval').value = '0.3';
+    d.getElementById('max-lottery-count').value = '10';
+
+    const before = calibrations;
+    d.getElementById('start-lottery').click();
+    await untilStopped(d, 30000);
+    await sleep(300);
+
+    check('停在第 2 抽', JSON.parse(
+        w.localStorage.getItem('hhanclub_lottery_stats_v4')).draws === 2);
+    check('收工前回服务端要了一次余额', calibrations > before,
+        `${before} → ${calibrations}`);
+    check('面板上是校准回来的权威值，不是本地估算',
+        /999,999/.test(d.getElementById('bean-balance').textContent),
+        d.getElementById('bean-balance').textContent);
+}
+
+/* ---------------------------------------------------------------- */
 console.log(`\n=========== ${passed} passed, ${failed} failed ===========\n`);
 process.exit(failed ? 1 : 0);

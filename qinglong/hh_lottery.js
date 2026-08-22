@@ -637,6 +637,14 @@ function normalizeStats(data) {
     stats.raw = { ...(data.raw || {}) };
 
     stats.originId = typeof data.originId === 'string' ? data.originId : null;
+
+    /* 大奖名册和导入台账是油猴版那边的东西，命令行版既不产生也不读 ——
+       但这个文件是双向的：README 里就写着两边格式一致，真有人会把油猴版
+       的备份丢进来让 NAS 接着记。原样带过去，别下次覆写就把人家攒了
+       几个月的名册抹了。 */
+    if (Array.isArray(data.jackpots)) stats.jackpots = data.jackpots;
+    if (Array.isArray(data.imports)) stats.imports = data.imports;
+
     return stats;
 }
 

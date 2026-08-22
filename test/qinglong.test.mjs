@@ -2220,6 +2220,45 @@ console.log('\n[71] 停机和通知是两个开关，互不牵连');
     await small.close();
 }
 
+/* ---------------------------------------------------------------- */
+console.log('\n[72] 拿油猴版的备份当统计文件接着跑，名册不能被洗掉');
+{
+    /* README 里写着两边格式一致，所以真会有人把油猴版的备份丢进 NAS
+       让命令行版接着记。命令行版不产生大奖名册，但也不能把人家攒了
+       几个月的那份原地抹掉。 */
+    const site = await startSite({ prizes: ['魔力 100 '], balance: 100000 });
+    const statsFile = path.join(TMP, 'stats-from-userscript.json');
+
+    fs.writeFileSync(statsFile, JSON.stringify({
+        kind: 'hhclub-lottery-backup', version: 4,
+        originId: 'from-userscript',
+        total: {
+            version: 4, draws: 500, cost: 1000000,
+            gains: { beans: 900000 },
+            prizes: { beans: { count: 500, value: 900000, tiers: { '500 憨豆': 500 } } },
+            raw: { '魔力 500': 500 },
+            originId: 'from-userscript',
+            jackpots: [{ at: 1700000000000, text: '魔力 780000' }],
+            imports: [{ exportId: 'e1', originId: 'friend', draws: 7, at: 1700000000001 }]
+        }
+    }, null, 2));
+
+    await runScript({ host: site.state.origin, draws: 1, statsFile });
+
+    const payload = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+    check('抽数照常累上去了', payload.total.draws === 501, `实际 ${payload.total.draws}`);
+    check('大奖名册原样还在', payload.total.jackpots?.length === 1,
+        JSON.stringify(payload.total.jackpots));
+    check('名册里的时刻没被改动', payload.total.jackpots?.[0]?.at === 1700000000000,
+        JSON.stringify(payload.total.jackpots));
+    check('导入台账也留着', payload.total.imports?.length === 1,
+        JSON.stringify(payload.total.imports));
+    check('记录线编号沿用，没另起一条',
+        payload.total.originId === 'from-userscript', payload.total.originId);
+
+    await site.close();
+}
+
 fs.rmSync(TMP, { recursive: true, force: true });
 
 console.log(`\n=========== ${passed} passed, ${failed} failed ===========\n`);
