@@ -2069,6 +2069,88 @@ console.log('\n[66] 抽奖那个 POST 绝不能重试 —— 重发就是又扣�
         /重发就是又扣一次憨豆/.test(idempotent), idempotent.slice(0, 400));
 }
 
+/* ---------------------------------------------------------------- */
+console.log('\n[67] 大奖通知要写全奖品名，不能只剩个档位');
+{
+    // 中 VIP 时通知里只有「⭐ 7 天」—— 光看这个谁知道是 VIP 还是彩虹 ID。
+    // label 只是档位，带单位的类别得把名字补回去。
+    const site = await startSite({
+        prizes: ['VIP 7 Day(s)'],
+        balance: 500000,
+        swapBeans: 1000000,
+        userClass: 'user'                     // 不是 VIP，真拿到 7 天
+    });
+    const hook = await startWebhook();
+
+    await runScript({
+        host: site.state.origin, draws: 1, interval: 0.5,
+        notifyBigPrize: true, webhookUrl: hook.url
+    });
+
+    const big = hook.got.find(item => /命中大奖/.test(item.title || ''));
+    check('大奖那条推出去了', !!big, hook.got.map(i => i.title).join(' | '));
+    check('写的是「VIP 7 天」，不是光秃秃的「7 天」',
+        /命中大奖：⭐ VIP 7 天/.test(big?.content || ''), big?.content);
+
+    await hook.close();
+    await site.close();
+}
+
+/* ---------------------------------------------------------------- */
+console.log('\n[68] 中 VIP 被折算成憨豆时，通知要说清实际到手的是什么');
+{
+    // 已经是 VIP 的话站点改发一百万憨豆。通知还写「⭐ VIP 7 天」的话，
+    // 会以为真拿到了会员。
+    const site = await startSite({
+        prizes: ['VIP 7 Day(s)'],
+        balance: 500000,
+        swapBeans: 1000000,
+        userClass: 'uploader',
+        onDraw: state => { state.balance += 1000000; }
+    });
+    const hook = await startWebhook();
+
+    await runScript({
+        host: site.state.origin, draws: 1, interval: 0.5,
+        notifyBigPrize: true, webhookUrl: hook.url
+    });
+
+    const big = hook.got.find(item => /命中大奖/.test(item.title || ''));
+    check('大奖那条推出去了', !!big, hook.got.map(i => i.title).join(' | '));
+    check('点明了折算成憨豆',
+        /命中大奖：⭐ VIP 7 天 → 已折算 1,000,000 憨豆/.test(big?.content || ''),
+        big?.content);
+
+    await hook.close();
+    await site.close();
+}
+
+/* ---------------------------------------------------------------- */
+console.log('\n[69] 憨豆大奖不重复写名字');
+{
+    // 憨豆的 label 自己就带「憨豆」二字，再补类别名会变成
+    // 「💰 憨豆 780,000 憨豆」
+    const site = await startSite({
+        prizes: ['魔力 780000 '],
+        balance: 500000
+    });
+    const hook = await startWebhook();
+
+    await runScript({
+        host: site.state.origin, draws: 1, interval: 0.5,
+        notifyBigPrize: true, bigPrizeMinBeans: 100000, webhookUrl: hook.url
+    });
+
+    const big = hook.got.find(item => /命中大奖/.test(item.title || ''));
+    check('还是「💰 780,000 憨豆」', /命中大奖：💰 780,000 憨豆/.test(big?.content || ''),
+        big?.content);
+    check('没有写成「憨豆 780,000 憨豆」',
+        !/憨豆 780,000 憨豆/.test(big?.content || ''), big?.content);
+
+    await hook.close();
+    await site.close();
+}
+
 fs.rmSync(TMP, { recursive: true, force: true });
 
 console.log(`\n=========== ${passed} passed, ${failed} failed ===========\n`);

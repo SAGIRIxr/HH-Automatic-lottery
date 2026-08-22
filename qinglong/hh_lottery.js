@@ -761,6 +761,8 @@ class Lottery {
         this.rateLimitStreak = 0;
         // 网络层失败单独计数：站点报错和机器断网是两码事，容忍度不一样
         this.networkErrorStreak = 0;
+        // 中 VIP 且被站点折算成憨豆时，暂存金额给紧随其后的大奖通知用
+        this.lastVipSwappedBeans = 0;
         this.intervalMs = CONFIG.interval * 1000;
         // 上一抽的 duration 就是下一抽的冷却窗口；请求发出时服务端已开始计时
         this.lastDurationMs = 0;
@@ -973,6 +975,8 @@ class Lottery {
         markVipSwapped(this.current, prize, beans);
         markVipSwapped(this.total, prize, beans);
         markVipSwapped(this.intervalStats, prize, beans);
+        // 紧接着就要推大奖通知，让它知道这一注实际到手的是憨豆
+        this.lastVipSwappedBeans = beans;
 
         report(`👑 你已经是 VIP，站点改发了 ${fmt(beans)} 憨豆 · 仍计为一次 VIP 中奖`);
 
@@ -994,10 +998,21 @@ class Lottery {
                 && prize.value >= CONFIG.bigPrizeMinBeans);
         if (!big) return;
 
+        /* label 只是档位（VIP 那档就是「7 天」），单独拿出来看不出中的是
+           什么奖 —— 通知里写着「⭐ 7 天」，谁知道是 VIP 还是彩虹 ID。
+           所以带单位的档位都补上类别名。
+
+           不带单位的（憨豆、邀请）label 本身就含名字了（「780,000 憨豆」
+           「1 邀请」），再补一遍反而重复。 */
         const meta = PRIZE_META[prize.type] || PRIZE_META.unknown;
-        let prizeDisplay = `${meta.icon} ${prize.label || String(prizeText).trim()}`;
-        if (prize.type === 'beans') {
-            prizeDisplay = `💰 ${fmt(prize.value)} 憨豆`;
+        const label = prize.label || String(prizeText).trim();
+        let prizeDisplay = `${meta.icon} ${meta.unit ? `${meta.name} ` : ''}${label}`;
+
+        // 已经是 VIP 的话站点改发憨豆，通知得说清实际到手的是什么，
+        // 不然只看到「⭐ VIP 7 天」，还以为真拿到了会员
+        if (prize.type === 'vip' && this.lastVipSwappedBeans) {
+            prizeDisplay += ` → 已折算 ${fmt(this.lastVipSwappedBeans)} 憨豆`;
+            this.lastVipSwappedBeans = 0;
         }
 
         const profit = (this.current.gains.beans || 0) - this.current.cost;
