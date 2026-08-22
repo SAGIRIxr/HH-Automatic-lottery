@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HHCLUB 自动抽奖 · 情绪价值拉满版
 // @namespace    http://tampermonkey.net/
-// @version      1.34.0
+// @version      1.35.0
 // @description  HHCLUB 自动抽奖增强版 · 分奖项中奖次数统计 · 一抽到底 · 实时余额 · 站内信清理
 // @author       Timqaq, JIEDIAO
 // @match        https://hhanclub.net/lucky.php
@@ -123,7 +123,7 @@
         logLimit: 50,
         // 大奖名册保留条数。大奖几千抽才碰一次，留久一点，
         // 它跟着历史统计一起存，换会话、关页面都不丢
-        jackpotLogLimit: 100,
+        jackpotLogLimit: 200,
         // 导入台账最多记这么多条，够认出重复了，再多就是负担
         importLedgerLimit: 60,
         /* 大奖全屏庆祝停留多久。够截图是第一位的 —— 抽奖本身在后台
@@ -477,6 +477,7 @@
         stats.jackpots = (Array.isArray(data.jackpots) ? data.jackpots : [])
             .filter(item => item && item.text)
             .map(item => ({ at: Number(item.at) || 0, text: String(item.text) }))
+            .sort((a, b) => b.at - a.at)
             .slice(0, CONFIG.jackpotLogLimit);
 
         return stats;

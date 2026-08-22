@@ -890,7 +890,15 @@ console.log('\n[19] 备份导出与导入');
             beans: { count: 9, value: 3000, tiers: { '500 憨豆': 9 } },
             invite: { count: 1, value: 1, tiers: { '1 邀请': 1 } }
         },
-        raw: { '魔力 500': 9 }
+        raw: { '魔力 500': 9 },
+        jackpots: [
+            ...Array.from({ length: 204 }, (_, i) => ({
+                at: 1699999999796 + i,
+                text: `VIP ${i + 1} Day(s)`
+            })),
+            // 故意把最新一条放末尾，导入不能假设文件原本已经排好序
+            { at: 1700000000000, text: '魔力 780000' }
+        ]
     };
     w.localStorage.setItem('hhanclub_lottery_stats_v4', JSON.stringify(seed));
 
@@ -905,6 +913,11 @@ console.log('\n[19] 备份导出与导入');
     check('备份带识别标记', payload.kind === 'hhclub-lottery-backup', payload.kind);
     check('备份含历史统计 10 抽', payload.total.draws === 10, payload.total.draws);
     check('备份含分奖项明细', payload.total.prizes.beans.count === 9);
+    check('备份带上大奖名册及原始时刻，并限制为最新 200 条',
+        payload.total.jackpots?.length === 200
+        && payload.total.jackpots[0].at === 1700000000000
+        && payload.total.jackpots[0].text === '魔力 780000',
+        `实际 ${payload.total.jackpots?.length} 条`);
 
     // 真正走一遍 importStats：拦下它 new 出来的 file input，塞个假文件再触发 change
     const backupJson = blobParts[0];
@@ -947,6 +960,9 @@ console.log('\n[19] 备份导出与导入');
     check('合并导入：档位次数相加为 18',
         stored.prizes.beans.tiers['500 憨豆'] === 18, stored.prizes.beans.tiers['500 憨豆']);
     check('合并导入：兜底文案相加为 18', stored.raw['魔力 500'] === 18, stored.raw['魔力 500']);
+    check('合并导入：相同大奖按时刻和文案去重且仍只留 200 条',
+        stored.jackpots?.length === 200 && stored.jackpots[0].at === 1700000000000,
+        `实际 ${stored.jackpots?.length} 条`);
 
     d.getElementById('view-mode').value = 'total';
     d.getElementById('view-mode').dispatchEvent(new w.Event('change'));
@@ -961,6 +977,9 @@ console.log('\n[19] 备份导出与导入');
     check('覆盖导入：抽数回到 10', stored.draws === 10, stored.draws);
     check('覆盖导入：档位次数回到 9',
         stored.prizes.beans.tiers['500 憨豆'] === 9, stored.prizes.beans.tiers['500 憨豆']);
+    check('覆盖导入：大奖名册也完整替换',
+        stored.jackpots?.length === 200 && stored.jackpots[0].text === '魔力 780000',
+        `实际 ${stored.jackpots?.length} 条`);
 
     // 取消必须真的什么都不做
     await feed(backupJson, 'cancel');

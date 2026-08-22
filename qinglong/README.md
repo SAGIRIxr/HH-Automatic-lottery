@@ -2,7 +2,7 @@
 
 **不只能在青龙里跑** —— 任何装了 Node 18+ 的机器（Debian / Ubuntu / NAS / 群晖…）`node hh_lottery.js` 直接就能用。不用开浏览器、不用挂机。**所有配置都在脚本最上面那一块，改完保存就能跑，不用配环境变量。** 跟油猴版共用一套抽奖逻辑（限流退避、VIP 折算、站内信清理都在），只是把面板换成了日志和通知。
 
-统计会存成一份 JSON，**格式和油猴版的「💾 备份 JSON」完全一致** —— 挂 NAS 上跑，隔段时间把文件拿下来，在浏览器面板里点「📥 导入备份」就能合进电脑上的历史统计。
+统计会存成一份 JSON，**格式和油猴版的「💾 备份 JSON」完全一致** —— 抽中 VIP 或 780,000 憨豆时也会写入相同的大奖名册。挂 NAS 上跑，隔段时间把文件拿下来，在浏览器面板里点「📥 导入备份」，统计和名册就能一起合进电脑。
 
 **依赖：Node 18 以上。** 用的是内置 `fetch`，不需要 `npm install` 任何东西。
 
@@ -260,7 +260,7 @@ c_secure_uid=NzMyMQ%3D%3D; c_secure_pass=...; c_secure_ssl=...; c_secure_tracker
 
 ## 统计导出 / 导入电脑
 
-`statsFile` 指的那份 JSON 就是油猴版的备份格式，跨次运行一直累加：
+`statsFile` 指的那份 JSON 就是油猴版的备份格式，跨次运行一直累加。`current.jackpots` 和 `total.jackpots` 使用与油猴版相同的 `[{ "at": 时间戳, "text": 原始中奖文案 }]`，合并导入时按时刻和文案去重，两端都只保留最新 200 条：
 
 ```json
 {
@@ -268,8 +268,17 @@ c_secure_uid=NzMyMQ%3D%3D; c_secure_pass=...; c_secure_ssl=...; c_secure_tracker
   "version": 4,
   "exportedAt": "2026-08-19T12:00:00.000Z",
   "source": "qinglong",
-  "current": { "draws": 20, ... },   // 这一次跑的
-  "total":   { "draws": 860, ... }   // 累计
+  "current": {
+    "draws": 20,
+    "jackpots": [{ "at": 1787400000000, "text": "VIP 7 Day(s)" }]
+  },
+  "total": {
+    "draws": 860,
+    "jackpots": [
+      { "at": 1787400000000, "text": "VIP 7 Day(s)" },
+      { "at": 1787300000000, "text": "魔力 780000" }
+    ]
+  }
 }
 ```
 

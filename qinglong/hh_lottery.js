@@ -179,6 +179,8 @@ const RUNTIME = {
     // 抽奖途中每多少抽顺手清一次（和油猴版的节奏一致）
     mailCleanEveryDraws: 25,
     lotteryMailKeyword: '幸运大转盘',
+    // 与油猴版通用备份保持一致：大奖名册只保留最新 200 条
+    jackpotLogLimit: 200,
     // 停止通知最多等多久 —— 卡在推送上不退出更糟
     notifyTimeoutMs: 8000
 };
@@ -600,6 +602,8 @@ function emptyStats() {
         gains: { beans: 0, magic: 0, invite: 0, rainbow: 0, vip: 0, makeup: 0, upload: 0, rename: 0 },
         prizes: {},
         raw: {},
+        // 与油猴版相同的大奖名册格式：[{ at, text }]，新的在前
+        jackpots: [],
         /* 记录线编号。这个文件本身就是油猴版能直接导入的备份，
            带上它，油猴版才认得出「同一份文件导了两遍」。 */
         originId: null,
@@ -646,11 +650,12 @@ function normalizeStats(data) {
 
     stats.originId = typeof data.originId === 'string' ? data.originId : null;
 
-    /* 大奖名册和导入台账是油猴版那边的东西，命令行版既不产生也不读 ——
-       但这个文件是双向的：README 里就写着两边格式一致，真有人会把油猴版
-       的备份丢进来让 NAS 接着记。原样带过去，别下次覆写就把人家攒了
-       几个月的名册抹了。 */
-    if (Array.isArray(data.jackpots)) stats.jackpots = data.jackpots;
+    // 两端共用 [{ at, text }]：清掉坏项，并限制为最新 200 条。
+    stats.jackpots = (Array.isArray(data.jackpots) ? data.jackpots : [])
+        .filter(item => item && item.text)
+        .map(item => ({ at: Number(item.at) || 0, text: String(item.text) }))
+        .sort((a, b) => b.at - a.at)
+        .slice(0, RUNTIME.jackpotLogLimit);
     if (Array.isArray(data.imports)) stats.imports = data.imports;
 
     return stats;
@@ -675,6 +680,18 @@ function applyPrize(stats, prizeText, cost, prize) {
 
     stats.lastAt = Date.now();
     if (!stats.firstAt) stats.firstAt = stats.lastAt;
+}
+
+/* 大奖名册固定只收这两档，不受通知门槛和停止开关影响。VIP 即使随后
+   被折算为憨豆，转盘中奖类型仍是 VIP，名册保留接口返回的原始文案。 */
+function isRosterJackpot(prize) {
+    return prize.type === 'vip'
+        || (prize.type === 'beans' && prize.value === 780000);
+}
+
+function recordJackpot(stats, prizeText, at) {
+    stats.jackpots.unshift({ at, text: String(prizeText).trim() });
+    stats.jackpots.length = Math.min(stats.jackpots.length, RUNTIME.jackpotLogLimit);
 }
 
 /* 把刚记下的那一注 VIP 改标成「已转换为憨豆」。
@@ -907,6 +924,12 @@ class Lottery {
         applyPrize(this.current, prizeText, this.cost, prize);
         applyPrize(this.total, prizeText, this.cost, prize);
         applyPrize(this.intervalStats, prizeText, this.cost, prize);
+
+        if (isRosterJackpot(prize)) {
+            const at = Date.now();
+            recordJackpot(this.current, prizeText, at);
+            recordJackpot(this.total, prizeText, at);
+        }
     }
 
     /* 抽奖页写着：「当中奖 [VIP] 时，如果用户已经是 VIP 或以上等级，

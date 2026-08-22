@@ -2252,8 +2252,7 @@ console.log('\n[71b] 旧 stopOnBigPrize=true 自动迁移为两项都开');
 console.log('\n[72] 拿油猴版的备份当统计文件接着跑，名册不能被洗掉');
 {
     /* README 里写着两边格式一致，所以真会有人把油猴版的备份丢进 NAS
-       让命令行版接着记。命令行版不产生大奖名册，但也不能把人家攒了
-       几个月的那份原地抹掉。 */
+       让命令行版接着记。读入时既要保住原名册，也要按两端共同上限收敛。 */
     const site = await startSite({ prizes: ['魔力 100 '], balance: 100000 });
     const statsFile = path.join(TMP, 'stats-from-userscript.json');
 
@@ -2266,7 +2265,13 @@ console.log('\n[72] 拿油猴版的备份当统计文件接着跑，名册不能
             prizes: { beans: { count: 500, value: 900000, tiers: { '500 憨豆': 500 } } },
             raw: { '魔力 500': 500 },
             originId: 'from-userscript',
-            jackpots: [{ at: 1700000000000, text: '魔力 780000' }],
+            jackpots: [
+                ...Array.from({ length: 204 }, (_, i) => ({
+                    at: 1699999999796 + i,
+                    text: `VIP ${i + 1} Day(s)`
+                })),
+                { at: 1700000000000, text: '魔力 780000' }
+            ],
             imports: [{ exportId: 'e1', originId: 'friend', draws: 7, at: 1700000000001 }]
         }
     }, null, 2));
@@ -2275,7 +2280,7 @@ console.log('\n[72] 拿油猴版的备份当统计文件接着跑，名册不能
 
     const payload = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
     check('抽数照常累上去了', payload.total.draws === 501, `实际 ${payload.total.draws}`);
-    check('大奖名册原样还在', payload.total.jackpots?.length === 1,
+    check('大奖名册保留最新 200 条', payload.total.jackpots?.length === 200,
         JSON.stringify(payload.total.jackpots));
     check('名册里的时刻没被改动', payload.total.jackpots?.[0]?.at === 1700000000000,
         JSON.stringify(payload.total.jackpots));
@@ -2283,6 +2288,42 @@ console.log('\n[72] 拿油猴版的备份当统计文件接着跑，名册不能
         JSON.stringify(payload.total.imports));
     check('记录线编号沿用，没另起一条',
         payload.total.originId === 'from-userscript', payload.total.originId);
+
+    await site.close();
+}
+
+/* ---------------------------------------------------------------- */
+console.log('\n[73] Node.js 新抽中的大奖写进油猴通用名册');
+{
+    const site = await startSite({
+        prizes: ['魔力 100 ', '魔力 780000 ', 'VIP 7 Day(s)', '魔力 1000000 '],
+        durations: [100], balance: 3000000, userClass: 'user'
+    });
+    const statsFile = path.join(TMP, 'stats-with-jackpots.json');
+
+    await runScript({
+        host: site.state.origin, draws: 4, statsFile,
+        followDuration: true, durationBufferMs: 0
+    });
+
+    const payload = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+    const current = payload.current.jackpots;
+    const total = payload.total.jackpots;
+    check('本次与历史都写入相同的两条大奖名册',
+        current?.length === 2 && total?.length === 2
+        && JSON.stringify(current) === JSON.stringify(total),
+        JSON.stringify({ current, total }));
+    check('名册只收精确 780,000 和 VIP，不收普通 1,000,000 憨豆',
+        Array.isArray(total)
+        && /VIP/.test(total?.[0]?.text || '')
+        && /780000/.test(total?.[1]?.text || '')
+        && total.every(item => !/1000000/.test(item.text)),
+        JSON.stringify(total));
+    check('名册按时间倒序且每条都带有效时刻',
+        Array.isArray(total)
+        && total.every(item => Number.isFinite(item.at) && item.at > 0)
+        && total[0].at >= total[1].at,
+        JSON.stringify(total));
 
     await site.close();
 }
