@@ -7,3 +7,4 @@ hh_lottery.config.json
 
 test/.shard-*.mjs
 test/.timings.json
+.worktrees/
