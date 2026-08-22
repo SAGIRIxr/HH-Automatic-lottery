@@ -1021,10 +1021,8 @@ class Lottery {
         }
     }
 
-    /* 挂机跑一晚上，中了大奖当场推一条 —— 不然要等跑完才知道。
-       口径和油猴版的全屏庆祝一致：VIP，或单笔憨豆到门槛。
-       推送失败不能影响抽奖，吞掉就是了。 */
-    /* 大奖通知保留可配置门槛，和停止条件互不影响。 */
+    /* 够不够格推一条大奖通知。门槛是可配置的，和「中奖就停」那两个
+       开关互不影响 —— 通知想宽松点、停机想严格点，是两回事。 */
     isBigPrize(prize) {
         return prize.type === 'vip'
             || (CONFIG.bigPrizeMinBeans > 0
@@ -1037,6 +1035,8 @@ class Lottery {
             || (CONFIG.stopOn780k && prize.type === 'beans' && prize.value === 780000);
     }
 
+    /* 挂机跑一晚上，中了大奖当场推一条 —— 不然要等跑完才知道。
+       推送失败不能影响抽奖，吞掉就是了。 */
     async pushBigPrize(prize, prizeText, willStop = false) {
         if (!CONFIG.notifyBigPrize) return;
         if (!this.isBigPrize(prize)) return;
