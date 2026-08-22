@@ -257,12 +257,14 @@ console.log('\n[4] A4：v3 历史数据迁移');
 }
 
 /* ---------------------------------------------------------------- */
-console.log('\n[5] B5：接口连续失败自动停止');
+console.log('\n[5] 接口一直失败也不停机，按阶梯拉长重试');
 {
+    // 挂机是无人值守的：站点重启、网线抖一下，人不在跟前，
+    // 停了就是整夜白过。改成一直重试，每 3 次抬一档等待时间。
     const dom = makeDom();
     const w = dom.window;
-    let calls = 0;
-    w.fetch = async () => { calls++; throw new Error('network down'); };
+    const stamps = [];
+    w.fetch = async () => { stamps.push(Date.now()); throw new Error('network down'); };
 
     await run(dom);
     const d = w.document;
@@ -270,13 +272,30 @@ console.log('\n[5] B5：接口连续失败自动停止');
     d.getElementById('max-lottery-count').value = '100';
     d.getElementById('start-lottery').click();
 
-    await untilStopped(d);
+    // 基数 1 秒：1 1 1 · 1.5 1.5 1.5 · 2.25 …，10 秒够看到抬档
+    await sleep(10000);
 
-    check(`连续失败 5 次后停止（发出 ${calls} 次请求）`, calls === 5, `实际 ${calls}`);
-    check('状态显示已停止', d.getElementById('lottery-status').textContent === '已停止');
-    check('没有把失败计入抽奖次数',
+    check('没有停机，还在重试', d.getElementById('lottery-status').textContent !== '已停止',
+        d.getElementById('lottery-status').textContent);
+    check(`一直在发请求（10 秒发了 ${stamps.length} 次）`, stamps.length >= 5,
+        `实际 ${stamps.length}`);
+
+    const gaps = stamps.slice(1).map((t, i) => t - stamps[i]);
+    check('前三次按基数 1 秒重试',
+        gaps.slice(0, 2).every(gap => gap >= 850 && gap < 1400), gaps.join(' / '));
+    check('第四次起抬到 1.5 秒档',
+        gaps.slice(3, 5).every(gap => gap >= 1350 && gap < 1900), gaps.join(' / '));
+    check('等待是一路变长的，没有退回去',
+        gaps[gaps.length - 1] >= gaps[0], gaps.join(' / '));
+
+    check('失败不计入抽奖次数',
         d.getElementById('draw-count').textContent === '0',
         d.getElementById('draw-count').textContent);
+
+    d.getElementById('stop-lottery').click();
+    await untilStopped(d, 5000);
+    check('手动点停止照样立刻停得下来',
+        d.getElementById('lottery-status').textContent === '已停止');
 }
 
 /* ---------------------------------------------------------------- */
@@ -3098,6 +3117,108 @@ console.log('\n[65] 老账和新记的能并排显示，互不重复计数');
         /更早还中过 2 次/.test(log.textContent), log.textContent);
     check('标题合计 3 次', d.getElementById('jackpot-count').textContent === '3 次',
         d.getElementById('jackpot-count').textContent);
+}
+
+/* ---------------------------------------------------------------- */
+console.log('\n[66] 被限流没完没了也不停机');
+{
+    // 以前连续 12 次被限流就自动停。站点限流总会过去，
+    // 停了反而白白空过一整夜。
+    const dom = makeDom({ pool: REAL_POOL, useBean: '每次消耗憨豆： 2000' });
+    const w = dom.window;
+
+    const stamps = [];
+    w.fetch = async url => {
+        if (String(url).includes('lucky.php')) {
+            return { ok: true, status: 200, text: async () => '<html><body></body></html>' };
+        }
+        stamps.push(Date.now());
+        return {
+            ok: true, status: 200,
+            text: async () => JSON.stringify({ ret: -1, msg: '不要重复点击！' })
+        };
+    };
+
+    await run(dom, { followDuration: true });
+    const d = w.document;
+    d.getElementById('max-lottery-count').value = '100';
+    d.getElementById('start-lottery').click();
+
+    await sleep(9000);
+
+    check('被拒了十几次也没停', d.getElementById('lottery-status').textContent !== '已停止',
+        d.getElementById('lottery-status').textContent);
+    check(`还在补枪（${stamps.length} 次）`, stamps.length >= 6, `实际 ${stamps.length}`);
+
+    const gaps = stamps.slice(1).map((t, i) => t - stamps[i]);
+    check('补枪间隔也在按阶梯往上抬',
+        gaps[gaps.length - 1] > gaps[0], gaps.join(' / '));
+
+    d.getElementById('stop-lottery').click();
+    await untilStopped(d, 5000);
+}
+
+/* ---------------------------------------------------------------- */
+console.log('\n[67] 余额不足这种终态还是要停 —— 重试没有意义');
+{
+    const dom = makeDom({ pool: REAL_POOL, useBean: '每次消耗憨豆： 2000' });
+    const w = dom.window;
+
+    w.fetch = async url => {
+        if (String(url).includes('lucky.php')) {
+            return { ok: true, status: 200, text: async () => '<html><body></body></html>' };
+        }
+        return {
+            ok: true, status: 200,
+            text: async () => JSON.stringify({ ret: -1, msg: '憨豆不足' })
+        };
+    };
+
+    await run(dom);
+    const d = w.document;
+    d.getElementById('lottery-interval').value = '0.5';
+    d.getElementById('max-lottery-count').value = '10';
+    d.getElementById('start-lottery').click();
+    await untilStopped(d, 15000);
+
+    check('停了', d.getElementById('lottery-status').textContent === '已停止');
+    check('日志说清是余额的事',
+        /憨豆不足/.test(d.getElementById('lottery-log').textContent),
+        d.getElementById('lottery-log').textContent.slice(-200));
+}
+
+/* ---------------------------------------------------------------- */
+console.log('\n[68] 没有 AudioContext 的环境里，保活不能把抽奖带崩');
+{
+    // jsdom 就没有 AudioContext。保活是锦上添花，
+    // 环境不支持就安静跳过，绝不能连累主流程
+    const dom = makeDom({ pool: REAL_POOL, useBean: '每次消耗憨豆： 2000' });
+    const w = dom.window;
+
+    check('这个环境确实没有 AudioContext',
+        !w.AudioContext && !w.webkitAudioContext);
+
+    w.fetch = async url => {
+        if (String(url).includes('lucky.php')) {
+            return { ok: true, status: 200, text: async () => '<html><body></body></html>' };
+        }
+        return {
+            ok: true, status: 200,
+            text: async () => JSON.stringify({ ret: 0, data: { prize_text: '魔力 100 ' } })
+        };
+    };
+
+    await run(dom);
+    const d = w.document;
+    d.getElementById('lottery-interval').value = '0.5';
+    d.getElementById('max-lottery-count').value = '2';
+    d.getElementById('start-lottery').click();
+    await untilStopped(d, 15000);
+
+    const stats = JSON.parse(w.localStorage.getItem('hhanclub_lottery_stats_v4'));
+    check('照样抽完了 2 次', stats.draws === 2, `实际 ${stats.draws}`);
+    check('日志里没有报错', !/❌/.test(d.getElementById('lottery-log').textContent),
+        d.getElementById('lottery-log').textContent.slice(-200));
 }
 
 /* ---------------------------------------------------------------- */

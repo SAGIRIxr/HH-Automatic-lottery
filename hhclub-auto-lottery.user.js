@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HHCLUB 自动抽奖 · 情绪价值拉满版
 // @namespace    http://tampermonkey.net/
-// @version      1.30.0
+// @version      1.31.0
 // @description  HHCLUB 自动抽奖增强版 · 分奖项中奖次数统计 · 一抽到底 · 实时余额 · 站内信清理
 // @author       Timqaq, JIEDIAO
 // @match        https://hhanclub.net/lucky.php
@@ -84,17 +84,41 @@
         // 抽成了下一轮就有真的 duration 了
         blindGapMs: 5000,
         // 冷却剩多久不知道时（本轮还没成功过，比如开抽前刚手动转过一把）
-        // 补枪要放慢：残留冷却最长 8 秒，300ms 连打会在它结束前就攒满
-        // maxRateLimitRetries 而误停，1 秒一枪则 12 次能兜住 12 秒
+        // 补枪的起步值。残留冷却最长 8 秒，300ms 连打纯属白打，
+        // 1 秒起步配上阶梯退避正好覆盖
         blindRetryMs: 1000,
         // 被限流时的退避策略
         backoffAfterErrors: 3,
         backoffFactor: 1.5,
         maxBackoffMs: 30000,
-        // 连续失败多少次后自动停止，避免接口异常时无限重试
-        maxConsecutiveErrors: 5,
-        // 连续被限流多少次后放弃，避免退避到上限后一直空转
-        maxRateLimitRetries: 12,
+        /* 挂机是无人值守的，所以不因为「失败几次」停机 —— 站点重启、
+           网线抖一下、CDN 抽风，人不在跟前就永远停在那儿了。
+           改成一直重试，但每 retryStepEvery 次抬一档等待时间：
+
+               300 300 300 · 450 450 450 · 675 675 675 …
+
+           一路乘到 maxRetryMs 封顶。站点真挂了也就是每 5 分钟探一次，
+           压力可以忽略；站点一恢复，下一次探测就接上了。 */
+        retryStepEvery: 3,
+        retryStepFactor: 1.5,
+        maxRetryMs: 300000,
+        // 接口报错 / 网络断的重试基数。比限流那 300ms 大 —— 限流是
+        // 「差一点点」，这类是真出事了，没必要贴着打
+        errorRetryMs: 1000,
+        // 连续失败到这个数就提醒一声（只提醒，不停机）
+        stuckWarnEvery: 10,
+        /* 后台保活。浏览器对不可见的标签页有三道收紧：
+           1. 定时器最小间隔被压到 1 秒（对我们 5~8 秒的节奏没影响）
+           2. 待够 5 分钟后转入 intensive throttling，定时器每分钟才跑一次
+              —— 这个会把挂机拖成龟速
+           3. 更狠的是 freeze / discard，整个页面被冻住甚至丢掉，脚本直接没了
+
+           正在出声的标签页不吃后面两条。所以开抽时挂一个几乎无声的
+           振荡器，停抽就关掉。音量取一个非零的极小值 —— 真的 0 或者
+           muted 会被判定成「没在播」，白挂。 */
+        keepAliveGain: 0.0001,
+        // 看门狗：多久没推进就认为被节流了，回来时补一次校准
+        watchdogIdleMs: 90000,
         // 日志保留条数
         logLimit: 50,
         // 大奖名册保留条数。大奖几千抽才碰一次，留久一点，
@@ -173,8 +197,8 @@
     let domBalanceSeen = null;
     let domCostSeen = null;
     let running = false;
-    // 限流和接口错误分开计数：以前共用一个计数器，几次限流叠上一两次网络抖动
-    // 就会凑够 maxConsecutiveErrors 被误判成接口异常而提前停机。
+    // 限流和接口错误分开计数：两者的重试基数不一样，混在一起数会让
+    // 「差一点点」的限流和「真出事了」的报错互相污染退避档位。
     let errorStreak = 0;
     let rateLimitStreak = 0;
     let dynamicInterval = 6800;
@@ -185,6 +209,10 @@
     let lastDrawSentAt = 0;
     // 被限流后下一次等待的覆盖值（快速补枪），用一次就清
     let quickRetryMs = 0;
+    // 后台保活用的音频节点
+    let keepAliveCtx = null;
+    // 最近一次循环推进的时刻，看门狗据此判断是不是被冻住过
+    let lastTickAt = 0;
     let roundStartDraws = 0;
     let sleepTimer = null;
     let sleepResolve = null;
@@ -261,6 +289,75 @@
             );
         } catch (error) {
             return str;
+        }
+    }
+
+    /* =========================================================
+       后台保活
+
+       挂机是无人值守的，标签页十有八九被切到后台。浏览器会把后台页
+       的定时器压到每分钟一次（intensive throttling），甚至直接冻结或
+       丢弃整个页面 —— 醒来发现一晚上只抽了几十次，或者脚本压根没了。
+
+       正在播放音频的标签页不受这两条限制。所以开抽时挂一个听不见的
+       振荡器，停抽就拆掉。
+    ========================================================= */
+
+    function startKeepAlive() {
+        if (keepAliveCtx) return;
+
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+
+        try {
+            const ctx = new Ctx();
+            const oscillator = ctx.createOscillator();
+            const gain = ctx.createGain();
+
+            // 不能是 0：静音轨会被当成「没在播」，保活就失效了
+            gain.gain.value = CONFIG.keepAliveGain;
+            oscillator.frequency.value = 20;      // 低到基本听不见
+            oscillator.connect(gain);
+            gain.connect(ctx.destination);
+            oscillator.start();
+
+            keepAliveCtx = { ctx, oscillator, gain };
+
+            // 点「开始抽奖」本身就是用户手势，正常能直接播；
+            // 万一还是被 autoplay 策略拦下，恢复一下
+            if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+        } catch (error) {
+            keepAliveCtx = null;
+        }
+    }
+
+    function stopKeepAlive() {
+        if (!keepAliveCtx) return;
+        const { ctx, oscillator } = keepAliveCtx;
+        keepAliveCtx = null;
+        try {
+            oscillator.stop();
+            ctx.close();
+        } catch (error) {
+            // 已经关掉了，无所谓
+        }
+    }
+
+    /* 标签页被切回来时看一眼：要是刚才被冻了很久，本地估算的余额
+       多半已经飘了，顺手校准一次。 */
+    function onVisibilityBack() {
+        if (!running || document.hidden) return;
+
+        const idle = Date.now() - lastTickAt;
+        if (lastTickAt && idle > CONFIG.watchdogIdleMs) {
+            addLog(`⏰ 标签页刚才被浏览器按住了 ${intervalText(idle / 1000)} 秒，`
+                + '已回服务端校准余额', 'warning');
+            calibrateBalance({ quiet: true }).catch(() => {});
+        }
+
+        // 有些浏览器切回前台会把 AudioContext 挂起，接着挂机就没保活了
+        if (keepAliveCtx?.ctx?.state === 'suspended') {
+            keepAliveCtx.ctx.resume().catch(() => {});
         }
     }
 
@@ -2892,8 +2989,10 @@
 
         if (!result.success || !result.parsed) {
             errorStreak++;
-            addLog(`❌ 请求失败：${result.error || result.status || '未知错误'}`, 'error');
-            guardErrorStreak();
+            quickRetryMs = stepBackoffMs(errorStreak, CONFIG.errorRetryMs);
+            addLog(`❌ 请求失败：${result.error || result.status || '未知错误'}`
+                + ` · ${intervalText(quickRetryMs / 1000)} 秒后再试`, 'error');
+            noteStuck(errorStreak, '请求失败');
             return;
         }
 
@@ -2935,25 +3034,24 @@
             rateLimitStreak++;
             if (settings.followDuration) {
                 // 被拒不重置服务端计时、也不扣憨豆，快速补枪即可。
-                // 但冷却剩多久都不知道时（开抽前刚手动转过一把）得放慢，
-                // 免得 12 连拒攒满 maxRateLimitRetries 被误判成持续限流
-                quickRetryMs = lastDurationMs ? CONFIG.rateLimitRetryMs : CONFIG.blindRetryMs;
+                // 冷却剩多久不知道时（开抽前刚手动转过一把）起步放慢一点。
+                // 一直被拒就按阶梯往上抬，不设次数上限 —— 站点在限流，
+                // 等下去总能过，停了反而白白空过一整夜。
+                const base = lastDurationMs ? CONFIG.rateLimitRetryMs : CONFIG.blindRetryMs;
+                quickRetryMs = stepBackoffMs(rateLimitStreak, base);
                 addLog(lastDurationMs
                     ? `⏳ ${msg}（上一抽转盘 ${intervalText(lastDurationMs / 1000)} 秒，没等够 · ${quickRetryMs}ms 后补一枪）`
                     : `⏳ ${msg}（冷却剩多久未知，${quickRetryMs}ms 后再试）`, 'warning');
             } else {
-                addLog(`⏳ ${msg}`, 'warning');
+                quickRetryMs = stepBackoffMs(rateLimitStreak, CONFIG.rateLimitRetryMs);
+                addLog(`⏳ ${msg} · ${intervalText(quickRetryMs / 1000)} 秒后再试`, 'warning');
                 if (rateLimitStreak >= CONFIG.backoffAfterErrors) {
                     dynamicInterval = Math.min(dynamicInterval * CONFIG.backoffFactor, CONFIG.maxBackoffMs);
                     setCurrentIntervalDisplay();
-                    addLog(`🔄 请求频繁，间隔自动调整至 ${intervalText(dynamicInterval / 1000)} 秒`, 'warning');
                 }
             }
 
-            if (rateLimitStreak >= CONFIG.maxRateLimitRetries) {
-                addLog(`🛑 连续 ${rateLimitStreak} 次被限流，自动停止`, 'error');
-                stopLottery('🛑 持续被限流，已停止');
-            }
+            noteStuck(rateLimitStreak, '被限流');
             return;
         }
 
@@ -2964,15 +3062,27 @@
         }
 
         errorStreak++;
-        addLog(`❌ ${msg}`, 'error');
-        guardErrorStreak();
+        quickRetryMs = stepBackoffMs(errorStreak, CONFIG.errorRetryMs);
+        addLog(`❌ ${msg} · ${intervalText(quickRetryMs / 1000)} 秒后再试`, 'error');
+        noteStuck(errorStreak, '接口报错');
     }
 
-    /* 接口持续异常时兜底停止，避免无限重试 */
-    function guardErrorStreak() {
-        if (errorStreak >= CONFIG.maxConsecutiveErrors) {
-            addLog(`🛑 连续 ${errorStreak} 次失败，自动停止`, 'error');
-            stopLottery('🛑 接口连续异常，已停止');
+    /* 连续失败第 streak 次该等多久。每 retryStepEvery 次抬一档：
+       基数 300 时是 300 300 300 · 450 450 450 · 675 …，封顶 maxRetryMs。 */
+    function stepBackoffMs(streak, baseMs) {
+        const step = Math.floor(Math.max(0, streak - 1) / CONFIG.retryStepEvery);
+        return Math.min(
+            CONFIG.maxRetryMs,
+            Math.round(baseMs * Math.pow(CONFIG.retryStepFactor, step))
+        );
+    }
+
+    /* 一直卡着不动时隔一阵子说一声，让人知道它还在转、卡在哪 ——
+       但不停机，无人值守的时候停了就再也起不来了。 */
+    function noteStuck(streak, what) {
+        if (streak > 0 && streak % CONFIG.stuckWarnEvery === 0) {
+            addLog(`⚠️ ${what}已经连续 ${streak} 次 · 仍在重试，`
+                + `当前每 ${intervalText(stepBackoffMs(streak, CONFIG.errorRetryMs) / 1000)} 秒探一次`, 'warning');
         }
     }
 
@@ -2995,6 +3105,8 @@
 
     async function lotteryLoop(maxCount) {
         while (running) {
+            // 看门狗的心跳。被冻住时这个值会停住，切回前台一比就知道
+            lastTickAt = Date.now();
             const roundCount = currentStats.draws - roundStartDraws;
 
             if (settings.drainMode) {
@@ -3047,7 +3159,10 @@
         lastDurationMs = 0;
         lastDrawSentAt = 0;
         quickRetryMs = 0;
+        lastTickAt = Date.now();
         setDurationInfo();
+        // 趁着点击这个手势把保活挂起来，晚了就要被 autoplay 策略拦
+        startKeepAlive();
         dynamicInterval = Math.round(interval * 1000);
         errorStreak = 0;
         rateLimitStreak = 0;
@@ -3092,6 +3207,7 @@
 
         running = false;
         cancelSleep();
+        stopKeepAlive();
 
         const status = $('lottery-status');
         if (status) {
@@ -3975,6 +4091,7 @@
         });
 
         window.addEventListener('resize', keepPanelInViewport);
+        document.addEventListener('visibilitychange', onVisibilityBack);
 
         // 关页面时如果还在抽，提醒一下
         window.addEventListener('beforeunload', event => {

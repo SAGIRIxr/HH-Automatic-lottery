@@ -1967,13 +1967,13 @@ console.log('\n[63] 断网不能当场收摊：退避重试，网络回来接着
     // 退避实际是 10 秒起步，测试里压到 200ms
     const { out } = await runScript(
         { host: site.state.origin, draws: 3, interval: 0.5 },
-        { networkRetryStepMs: 200, networkRetryMaxMs: 400 }
+        { networkRetryMs: 200 }
     );
 
     check('确实掐断了两次', site.state.killed === 2, `实际 ${site.state.killed} 次`);
     check('认出来是网络不通，不是站点报错',
         /📡 网络不通/.test(out), out.slice(-900));
-    check('报了第几次、还剩几次', /第 1\/10 次/.test(out) && /第 2\/10 次/.test(out),
+    check('报了这是第几次', /第 1 次/.test(out) && /第 2 次/.test(out),
         out.slice(-900));
     check('网络回来说了一声', /📡 网络恢复了/.test(out), out.slice(-900));
     check('三抽一次没少', site.state.draws === 3, `实际 ${site.state.draws}`);
@@ -1984,22 +1984,31 @@ console.log('\n[63] 断网不能当场收摊：退避重试，网络回来接着
 }
 
 /* ---------------------------------------------------------------- */
-console.log('\n[64] 网络一直不通，试够次数才停，并说清是网络的事');
+console.log('\n[64] 网络一直不通也不收摊，等待按阶梯往上抬');
 {
+    // 挂机无人值守：站点重启、网线抖一夜，收摊了就是整夜白过。
+    // 一直重试，每 3 次抬一档，最终封顶。
     const site = await startSite({
         prizes: ['魔力 100 '],
         balance: 100000,
-        killAttempts: Array.from({ length: 30 }, (_, i) => i + 1)   // 全掐
+        killAttempts: Array.from({ length: 60 }, (_, i) => i + 1)   // 全掐
     });
 
     const { out } = await runScript(
         { host: site.state.origin, draws: 5, interval: 0.5 },
-        { networkRetryStepMs: 100, networkRetryMaxMs: 200 }
+        { networkRetryMs: 100, maxRetryMs: 400, stuckWarnEvery: 4 }
     );
 
-    check('试满 10 次才放弃', /试了 10 次还是不行/.test(out), out.slice(-900));
-    check('停止原因点明是网络', /网络连不上/.test(out), out.slice(-900));
-    check('一抽都没记上', site.state.draws === 0, `实际 ${site.state.draws}`);
+    check('没有因为「试够次数」收摊',
+        !/试了 \d+ 次还是不行/.test(out) && !/网络连不上/.test(out), out.slice(-900));
+    check('一直在重试，次数远超过原来的 10 次上限',
+        /第 12 次/.test(out), out.slice(-1200));
+    check('卡久了会提醒一声，但不停',
+        /仍在重试/.test(out), out.slice(-1200));
+    check('等待抬到了封顶值', /0\.4 秒后重试/.test(out), out.slice(-1200));
+    check('熬过 60 次断网后，网络一通就接着把 5 抽跑完',
+        site.state.draws === 5, `实际 ${site.state.draws}`);
+    check('恢复时说了一声', /📡 网络恢复了/.test(out), out.slice(-1200));
 
     await site.close();
 }

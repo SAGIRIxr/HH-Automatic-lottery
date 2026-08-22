@@ -113,19 +113,29 @@ const CONFIG = {
 
 /* 下面这些是内部节奏参数，除非站点风控变了，否则不用碰 */
 const RUNTIME = {
-    // 连续失败多少次放弃
-    maxErrors: 5,
-    /* 网络层错误（DNS 挂了、连接被重置、请求超时）单独算一档。
+    /* 挂机是无人值守的，所以不因为「失败几次」收摊 —— 站点重启、
+       网线抖一下、CDN 抽风，人不在跟前就整夜白过了。改成一直重试，
+       但每 retryStepEvery 次抬一档等待时间：
 
-       这类错误跟「站点返回了错误」不是一回事：站点报错说明连得上，
-       多半是号或参数的问题，多试几次没意义；网络断了则纯粹是外部原因，
-       挂机跑几小时中间抖一下很正常，熬过去就行。
+           1 1 1 · 1.5 1.5 1.5 · 2.25 2.25 2.25 …（秒）
 
-       配合下面的退避，10 次大约能扛住 8 分钟的断网。 */
-    maxNetworkErrors: 10,
-    // 网络错误第 n 次失败等 n × 这个数，封顶 networkRetryMaxMs
-    networkRetryStepMs: 10000,
-    networkRetryMaxMs: 90000,
+       一路乘到 maxRetryMs 封顶。站点真挂了也就是每 5 分钟探一次，
+       压力可以忽略；站点一恢复，下一次探测就接上了。
+
+       任务本身有 CONFIG.draws 和青龙的超时兜着，不会真的无限跑。 */
+    retryStepEvery: 3,
+    retryStepFactor: 1.5,
+    maxRetryMs: 300000,
+    // 站点报错 / HTTP 异常的重试基数
+    errorRetryMs: 1000,
+    /* 网络层错误（DNS 挂了、连接被重置、请求超时）单独算一档，基数更大。
+
+       这类错误跟「站点返回了错误」不是一回事：站点报错说明连得上；
+       网络断了则纯粹是外部原因，挂机跑几小时中间抖一下很正常，
+       贴着重试没意义，熬过去就行。 */
+    networkRetryMs: 10000,
+    // 连续失败到这个数就提醒一声（只提醒，不收摊）
+    stuckWarnEvery: 10,
     /* 单个幂等请求（读页面、删站内信）的网络重试。
 
        和上面那组不是一回事：那组管的是抽奖主循环整体的节奏，这组只在
@@ -135,8 +145,6 @@ const RUNTIME = {
        重试一次会新建连接，多半就好了。 */
     requestRetries: 3,
     requestRetryStepMs: 1000,
-    // 连续被限流多少次放弃
-    maxRateLimits: 200,
     // 被限流后的退避
     backoffAfter: 3,
     backoffFactor: 1.5,
@@ -525,6 +533,16 @@ const CLASS_RANK = {
     sysop: 15,
     staffleader: 16
 };
+
+/* 连续失败第 streak 次该等多久。每 retryStepEvery 次抬一档：
+   基数 1 秒时是 1 1 1 · 1.5 1.5 1.5 · 2.25 …，封顶 maxRetryMs。 */
+function stepBackoffMs(streak, baseMs) {
+    const step = Math.floor(Math.max(0, streak - 1) / RUNTIME.retryStepEvery);
+    return Math.min(
+        RUNTIME.maxRetryMs,
+        Math.round(baseMs * Math.pow(RUNTIME.retryStepFactor, step))
+    );
+}
 
 /* 从个人页里读出 class 序号。读不出返回 null。 */
 function parseClassRank(html) {
@@ -1138,34 +1156,24 @@ class Lottery {
 
             const result = await this.drawOnce();
 
-            // 网络层失败：外部原因，退避着多熬几次，别为一次抖动收摊
+            // 网络层失败：外部原因，一直熬，等待按阶梯往上抬
             if (result.network) {
                 this.networkErrorStreak++;
-                const wait = Math.min(
-                    RUNTIME.networkRetryStepMs * this.networkErrorStreak,
-                    RUNTIME.networkRetryMaxMs
-                );
+                const wait = stepBackoffMs(this.networkErrorStreak, RUNTIME.networkRetryMs);
 
-                if (this.networkErrorStreak >= RUNTIME.maxNetworkErrors) {
-                    this.stopReason = `网络连不上，连续 ${this.networkErrorStreak} 次失败后停止（${result.error}）`;
-                    report(`🛑 网络连不上，试了 ${this.networkErrorStreak} 次还是不行，停止（${result.error}）`);
-                    return;
-                }
-
-                log(`📡 网络不通（${result.error}）· 第 ${this.networkErrorStreak}/${RUNTIME.maxNetworkErrors} 次，`
-                    + `${Math.round(wait / 1000)} 秒后重试`);
+                log(`📡 网络不通（${result.error}）· 第 ${this.networkErrorStreak} 次，`
+                    + `${intervalText(wait / 1000)} 秒后重试`);
+                this.noteStuck(this.networkErrorStreak, '网络不通', wait);
                 this.quickRetryMs = wait;
                 continue;
             }
 
             if (!result.data) {
                 this.errorStreak++;
-                log(`❌ 请求失败（HTTP ${result.status}）`);
-                if (this.errorStreak >= RUNTIME.maxErrors) {
-                    this.stopReason = `连续 ${this.errorStreak} 次失败，停止`;
-                    report(`🛑 连续 ${this.errorStreak} 次失败，停止`);
-                    return;
-                }
+                this.quickRetryMs = stepBackoffMs(this.errorStreak, RUNTIME.errorRetryMs);
+                log(`❌ 请求失败（HTTP ${result.status}）· `
+                    + `${intervalText(this.quickRetryMs / 1000)} 秒后再试`);
+                this.noteStuck(this.errorStreak, '请求失败', this.quickRetryMs);
                 continue;
             }
 
@@ -1219,24 +1227,23 @@ class Lottery {
             if (msg.includes('重复点击') || msg.includes('请稍后') || msg.includes('频繁')) {
                 this.rateLimitStreak++;
                 if (CONFIG.followDuration) {
-                    this.quickRetryMs = this.lastDurationMs
+                    // 一直被拒就按阶梯往上抬，不设次数上限 —— 站点在限流，
+                    // 等下去总能过，收摊反而白白空过一整夜
+                    const base = this.lastDurationMs
                         ? RUNTIME.rateLimitRetryMs
                         : RUNTIME.blindRetryMs;
+                    this.quickRetryMs = stepBackoffMs(this.rateLimitStreak, base);
                     log(this.lastDurationMs
                         ? `⏳ ${msg}（上一抽转盘 ${intervalText(this.lastDurationMs / 1000)} 秒，没等够 · ${this.quickRetryMs}ms 后补一枪）`
                         : `⏳ ${msg}（冷却剩多久未知，${this.quickRetryMs}ms 后再试）`);
                 } else {
-                    log(`⏳ ${msg}`);
+                    this.quickRetryMs = stepBackoffMs(this.rateLimitStreak, RUNTIME.rateLimitRetryMs);
+                    log(`⏳ ${msg} · ${intervalText(this.quickRetryMs / 1000)} 秒后再试`);
                     if (this.rateLimitStreak >= RUNTIME.backoffAfter) {
                         this.intervalMs = Math.min(this.intervalMs * RUNTIME.backoffFactor, RUNTIME.maxBackoffMs);
-                        log(`🔄 间隔上调到 ${intervalText(this.intervalMs / 1000)} 秒`);
                     }
                 }
-                if (this.rateLimitStreak >= RUNTIME.maxRateLimits) {
-                    this.stopReason = `连续 ${this.rateLimitStreak} 次被限流，停止`;
-                    report(`🛑 连续 ${this.rateLimitStreak} 次被限流，停止`);
-                    return;
-                }
+                this.noteStuck(this.rateLimitStreak, '被限流', this.quickRetryMs);
                 continue;
             }
 
@@ -1248,12 +1255,18 @@ class Lottery {
             }
 
             this.errorStreak++;
-            log(`❌ ${msg}`);
-            if (this.errorStreak >= RUNTIME.maxErrors) {
-                this.stopReason = `连续 ${this.errorStreak} 次失败，停止`;
-                report(`🛑 连续 ${this.errorStreak} 次失败，停止`);
-                return;
-            }
+            this.quickRetryMs = stepBackoffMs(this.errorStreak, RUNTIME.errorRetryMs);
+            log(`❌ ${msg} · ${intervalText(this.quickRetryMs / 1000)} 秒后再试`);
+            this.noteStuck(this.errorStreak, '接口报错', this.quickRetryMs);
+        }
+    }
+
+    /* 一直卡着不动时隔一阵子推一条，让人知道它还在转、卡在哪 ——
+       但不收摊，无人值守的时候停了就再也起不来了。 */
+    noteStuck(streak, what, waitMs) {
+        if (streak > 0 && streak % RUNTIME.stuckWarnEvery === 0) {
+            report(`⚠️ ${what}已经连续 ${streak} 次 · 仍在重试，`
+                + `当前每 ${intervalText(waitMs / 1000)} 秒探一次`);
         }
     }
 
