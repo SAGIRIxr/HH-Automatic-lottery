@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HHCLUB 自动抽奖 · 情绪价值拉满版
 // @namespace    http://tampermonkey.net/
-// @version      1.31.0
+// @version      1.32.0
 // @description  HHCLUB 自动抽奖增强版 · 分奖项中奖次数统计 · 一抽到底 · 实时余额 · 站内信清理
 // @author       Timqaq, JIEDIAO
 // @match        https://hhanclub.net/lucky.php
@@ -124,6 +124,8 @@
         // 大奖名册保留条数。大奖几千抽才碰一次，留久一点，
         // 它跟着历史统计一起存，换会话、关页面都不丢
         jackpotLogLimit: 100,
+        // 导入台账最多记这么多条，够认出重复了，再多就是负担
+        importLedgerLimit: 60,
         /* 大奖全屏庆祝停留多久。够截图是第一位的 —— 抽奖本身在后台
            照跑，遮罩多留一会儿不耽误事。也可以随手点掉或按 Esc。 */
         jackpotHoldMs: 15000,
@@ -406,9 +408,18 @@
             raw: {},
             // 大奖名册：[{ at, text }]，新的在前
             jackpots: [],
+            /* 这份统计的「血脉编号」。备份文件带着它出门，导回来的时候
+               就能认出这是自己的记录，而不是别人另起炉灶的一份。 */
+            originId: null,
+            // 并进来过的备份台账：[{ exportId, originId, draws, at }]
+            imports: [],
             firstAt: null,
             lastAt: null
         };
+    }
+
+    function randomId() {
+        return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
     }
 
     function normalizeStats(data) {
@@ -443,6 +454,17 @@
 
         stats.raw = { ...(data.raw || {}) };
 
+        stats.originId = typeof data.originId === 'string' ? data.originId : null;
+        stats.imports = (Array.isArray(data.imports) ? data.imports : [])
+            .filter(item => item && (item.exportId || item.originId))
+            .map(item => ({
+                exportId: item.exportId ? String(item.exportId) : null,
+                originId: item.originId ? String(item.originId) : null,
+                draws: Number(item.draws) || 0,
+                at: Number(item.at) || 0
+            }))
+            .slice(-CONFIG.importLedgerLimit);
+
         // 老版本没有这个字段，读到就是空的，不影响其余统计
         stats.jackpots = (Array.isArray(data.jackpots) ? data.jackpots : [])
             .filter(item => item && item.text)
@@ -460,15 +482,25 @@
         }
     }
 
+    /* 头一次读到没有血脉编号的统计就补一个并落盘 —— 之后每份备份都带着它，
+       导回来时才认得出「这是同一条记录线」。 */
+    function stampOrigin(stats) {
+        if (!stats.originId) {
+            stats.originId = randomId();
+            saveStats(stats);
+        }
+        return stats;
+    }
+
     function loadStats() {
         try {
             const raw = localStorage.getItem(STATS_KEY);
-            if (raw) return normalizeStats(JSON.parse(raw));
+            if (raw) return stampOrigin(normalizeStats(JSON.parse(raw)));
 
             const migrated = migrateLegacyStats();
             if (migrated) {
                 saveStats(migrated);
-                return migrated;
+                return stampOrigin(migrated);
             }
         } catch (error) {
             console.error('HHCLUB 读取统计失败:', error);
@@ -1746,6 +1778,22 @@
     margin-bottom: 12px;
 }
 .hh-modal-text b { color: #d4873a; }
+.hh-modal-warn {
+    padding: 8px 10px;
+    margin-bottom: 10px;
+    border-radius: 8px;
+    border: 1px solid #e8c08a;
+    background: #fdf3e2;
+    font-size: 10px;
+    line-height: 1.65;
+    color: #8a6034;
+}
+.hh-modal-warn b {
+    display: block;
+    margin-bottom: 2px;
+    font-size: 11px;
+    color: #c06a20;
+}
 .hh-modal-btn {
     display: block;
     width: 100%;
@@ -3325,19 +3373,25 @@
 
     /* 完整备份。和 CSV 不同：CSV 是给表格看的，这份是能原样导回来的。 */
     function backupStats() {
+        const total = loadStats();
         const payload = {
             kind: 'hhclub-lottery-backup',
             version: 4,
             exportedAt: new Date().toISOString(),
+            /* 这两个编号是给「重复导入」把关用的：originId 认记录线，
+               exportId 认这一个文件。老备份没有也照样能导，只是认不出重复。 */
+            originId: total.originId,
+            exportId: randomId(),
             current: currentStats,
-            total: loadStats()
+            total
         };
 
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
         const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
 
-        downloadBlob(blob, `hhclub-lottery-backup-${stamp}.json`);
-        addLog('💾 已导出备份', 'success');
+        // 文件名带上抽数，一堆备份摆在一起时不用挨个打开才知道谁新
+        downloadBlob(blob, `hhclub-lottery-backup-${stamp}-${total.draws}抽.json`);
+        addLog(`💾 已导出备份 · ${fmt(total.draws)} 抽`, 'success');
     }
 
     /* 两份统计相加。导入时选「合并」走这里，两边结构同构所以能逐项累加。 */
@@ -3380,6 +3434,14 @@
             .sort((a, b) => b.at - a.at)
             .slice(0, CONFIG.jackpotLogLimit);
 
+        /* 台账要一起并过来：合并之后这份统计就「含有」对方的历史了。
+           哪天对方那台机器把这份导回去，靠台账就能认出转了一圈的自己。 */
+        const ledger = new Map();
+        [...result.imports, ...other.imports].forEach(item => {
+            ledger.set(`${item.exportId || ''}|${item.originId || ''}`, item);
+        });
+        result.imports = [...ledger.values()].slice(-CONFIG.importLedgerLimit);
+
         const firsts = [base?.firstAt, extra?.firstAt].filter(Boolean);
         if (firsts.length) result.firstAt = Math.min(...firsts);
         result.lastAt = Math.max(base?.lastAt || 0, extra?.lastAt || 0) || null;
@@ -3387,29 +3449,108 @@
         return result;
     }
 
+    /* 这份统计里含有哪些记录线：自己的，加上历次并进来的。
+       两份统计的记录线一旦有交集，就说明它们共享过历史。 */
+    function lineageOf(stats) {
+        const ids = new Set();
+        if (stats?.originId) ids.add(stats.originId);
+        (stats?.imports || []).forEach(item => {
+            if (item.originId) ids.add(item.originId);
+        });
+        return ids;
+    }
+
+    /* 统计存的是累加值，没有逐抽的流水，所以合并没法真去重 —— 重叠的部分
+       一定会被算两遍。既然改不了这一点，那就在按下去之前认出来、说清楚。
+
+       返回 null 表示没查出问题。 */
+    function detectOverlap(existing, incoming) {
+        const seen = (existing.imports || []).find(
+            item => incoming.exportId && item.exportId === incoming.exportId
+        );
+        if (seen) {
+            const when = seen.at ? new Date(seen.at).toLocaleString('zh-CN') : '之前';
+            return {
+                title: '这个文件已经合并过一次了',
+                detail: `${when} 并进来过同一份备份。再合一次，里面每一抽都会被算两遍。`
+            };
+        }
+
+        const mine = lineageOf(existing);
+        if ([...lineageOf(incoming)].some(id => mine.has(id))) {
+            return {
+                title: '两份记录同源',
+                detail: '这份备份和当前历史出自同一条记录线（同一台设备，'
+                    + '或者两边互相导过），重叠的部分合并后会被算两遍。'
+            };
+        }
+
+        /* 老备份没有编号，只能拿大奖时刻对表。时刻精确到毫秒，
+           同一毫秒中同一个奖不可能是巧合。 */
+        const stamps = new Set((existing.jackpots || []).map(item => `${item.at}|${item.text}`));
+        const hit = (incoming.jackpots || []).filter(item => stamps.has(`${item.at}|${item.text}`));
+        if (hit.length) {
+            return {
+                title: `有 ${hit.length} 条大奖记录跟当前历史完全重合`,
+                detail: '同一毫秒中同一个奖不会是巧合，这两份记录是重叠的。'
+            };
+        }
+
+        // 再退一步：时间区间整个被罩住，抽数也不更多，多半是旧快照
+        if (incoming.draws > 0 && existing.draws >= incoming.draws
+            && incoming.firstAt && incoming.lastAt && existing.firstAt && existing.lastAt
+            && incoming.firstAt >= existing.firstAt && incoming.lastAt <= existing.lastAt) {
+            return {
+                title: '看着像是同一批记录的旧快照',
+                detail: '这份备份的时间区间整个落在当前历史里，抽数也不比现在多。'
+            };
+        }
+        return null;
+    }
+
     /* confirm() 只有两个出口，塞不下「合并 / 覆盖 / 取消」三种意图 ——
        之前用「取消 = 合并」，既反直觉又没了真正的退出路径。改成自己弹一个。
-       合并是主路径：不同设备的记录本来就不重合。 */
-    function askImportMode(drawCount, currentCount) {
+       合并是主路径：不同设备的记录本来就不重合。
+
+       查出重叠时不堵死合并 —— 万一是误判，用户仍该说了算 —— 但把推荐项
+       换掉：新快照推「覆盖」（同源的新快照本来就是旧的超集，覆盖才是对的），
+       旧快照推「取消」（当前历史已经含着它了，什么都不用做）。 */
+    function askImportMode(drawCount, currentCount, overlap) {
         return new Promise(resolve => {
+            const recommend = !overlap ? 'merge'
+                : (drawCount > currentCount ? 'replace' : 'cancel');
+            const cls = mode => `hh-modal-btn${mode === recommend ? ' hh-modal-primary' : ''}`;
+
             const overlay = document.createElement('div');
             overlay.className = 'hh-modal-overlay';
             overlay.innerHTML = `
                 <div class="hh-modal">
                     <div class="hh-modal-title">📥 导入备份</div>
+                    ${overlap ? `
+                    <div class="hh-modal-warn">
+                        <b>⚠️ ${overlap.title}</b>
+                        ${overlap.detail}
+                    </div>` : ''}
                     <div class="hh-modal-text">
                         备份里有 <b>${fmt(drawCount)}</b> 抽记录，<br>
                         当前历史统计有 <b>${fmt(currentCount)}</b> 抽。
                     </div>
-                    <button class="hh-modal-btn hh-modal-primary" data-mode="merge">
+                    <button class="${cls('merge')}" data-mode="merge">
                         合并 · 共 ${fmt(drawCount + currentCount)} 抽
-                        <span>换设备用这个，两边记录相加</span>
+                        <span>${overlap
+                            ? '⚠️ 重叠的那部分会被算两遍，确认不是重复导入再选'
+                            : '换设备用这个，两边记录相加'}</span>
                     </button>
-                    <button class="hh-modal-btn" data-mode="replace">
+                    <button class="${cls('replace')}" data-mode="replace">
                         覆盖 · 只留 ${fmt(drawCount)} 抽
-                        <span>丢掉当前历史，只保留备份里的</span>
+                        <span>${overlap && drawCount > currentCount
+                            ? '同源的新快照选这个，不会重复计算'
+                            : '丢掉当前历史，只保留备份里的'}</span>
                     </button>
-                    <button class="hh-modal-btn hh-modal-ghost" data-mode="cancel">取消</button>
+                    <button class="${recommend === 'cancel'
+                        ? 'hh-modal-btn hh-modal-primary' : 'hh-modal-btn hh-modal-ghost'}"
+                        data-mode="cancel">取消${recommend === 'cancel'
+                            ? '<span>重叠的部分已经在当前历史里了</span>' : ''}</button>
                 </div>
             `;
 
@@ -3463,8 +3604,16 @@
             }
 
             const parsed = normalizeStats(incoming);
+            // 编号在备份文件的外层，裸统计对象里也认
+            parsed.originId = parsed.originId
+                || (typeof payload?.originId === 'string' ? payload.originId : null);
+            const exportId = typeof payload?.exportId === 'string' ? payload.exportId : null;
+
             const existing = loadStats();
-            const mode = await askImportMode(parsed.draws, existing.draws);
+            const overlap = detectOverlap(existing, { ...parsed, exportId });
+            if (overlap) addLog(`⚠️ ${overlap.title}`, 'warning');
+
+            const mode = await askImportMode(parsed.draws, existing.draws, overlap);
 
             if (mode === 'cancel') {
                 addLog('📥 已取消导入', 'info');
@@ -3472,6 +3621,17 @@
             }
 
             const merged = mode === 'replace' ? parsed : mergeStats(existing, parsed);
+            /* 覆盖之后这台机器就是那条记录线的延续，血脉跟着备份走；
+               合并则留着自己的。两种情况都要把这次导入记进台账，
+               下次同一个文件再进来就认得出。 */
+            if (!merged.originId) merged.originId = randomId();
+            merged.imports = [...merged.imports, {
+                exportId,
+                originId: parsed.originId,
+                draws: parsed.draws,
+                at: Date.now()
+            }].slice(-CONFIG.importLedgerLimit);
+
             saveStats(merged);
             totalStats = merged;
 

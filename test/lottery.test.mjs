@@ -3222,5 +3222,152 @@ console.log('\n[68] 没有 AudioContext 的环境里，保活不能把抽奖带�
 }
 
 /* ---------------------------------------------------------------- */
+console.log('\n[69] 重复导入同一份记录会被认出来');
+{
+    /* 统计存的是累加值，没有逐抽流水，合并没法真去重 —— 重叠的部分
+       一定被算两遍。所以只能在按下去之前认出来并说清楚。 */
+    const dom = makeDom();
+    const w = dom.window;
+
+    const NativeBlob = w.Blob;
+    let blobParts = null;
+    w.Blob = function (parts, options) {
+        blobParts = parts;
+        return new NativeBlob(parts, options);
+    };
+    w.URL.createObjectURL = () => 'blob:stub';
+
+    w.localStorage.setItem('hhanclub_lottery_stats_v4', JSON.stringify({
+        version: 4, draws: 10, cost: 20000,
+        gains: { beans: 3000, invite: 0, rainbow: 0, vip: 0, makeup: 0, upload: 0 },
+        prizes: { beans: { count: 10, value: 3000, tiers: { '500 憨豆': 10 } } },
+        raw: { '魔力 500': 10 },
+        jackpots: [{ at: 1700000000000, text: '魔力 780000' }]
+    }));
+
+    await run(dom);
+    const d = w.document;
+
+    d.getElementById('backup-stats').click();
+    await sleep(80);
+    const backup = JSON.parse(blobParts[0]);
+
+    check('备份带上了记录线编号', typeof backup.originId === 'string' && backup.originId.length > 4,
+        String(backup.originId));
+    check('备份带上了这一个文件的编号', typeof backup.exportId === 'string',
+        String(backup.exportId));
+    check('两个编号不是同一个', backup.originId !== backup.exportId);
+    check('统计里也存下了记录线编号',
+        JSON.parse(w.localStorage.getItem('hhanclub_lottery_stats_v4')).originId === backup.originId);
+
+    const nativeCreate = d.createElement.bind(d);
+    let picker = null;
+    d.createElement = tag => {
+        const el = nativeCreate(tag);
+        if (tag === 'input') picker = el;
+        return el;
+    };
+
+    // 打开导入弹窗但先不选，把弹窗本身交出来看
+    const openDialog = async json => {
+        picker = null;
+        d.getElementById('import-stats').click();
+        Object.defineProperty(picker, 'files', {
+            configurable: true,
+            get: () => [{ name: 'backup.json', text: async () => json }]
+        });
+        picker.dispatchEvent(new w.Event('change'));
+        await until(() => !!d.querySelector('.hh-modal-overlay'), 5000);
+        return d.querySelector('.hh-modal-overlay');
+    };
+    const choose = async (dialog, mode) => {
+        dialog.querySelector(`[data-mode="${mode}"]`)
+            .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+        await until(() => !d.querySelector('.hh-modal-overlay'), 5000);
+    };
+
+    /* --- 自己的备份原样导回来 --- */
+    let dialog = await openDialog(JSON.stringify(backup));
+    check('弹了重复警告', !!dialog.querySelector('.hh-modal-warn'),
+        dialog.textContent.replace(/\s+/g, ' ').slice(0, 200));
+    check('警告点明是同源', /同源/.test(dialog.querySelector('.hh-modal-warn').textContent),
+        dialog.querySelector('.hh-modal-warn').textContent);
+    check('合并不再是推荐项',
+        !dialog.querySelector('[data-mode="merge"]').classList.contains('hh-modal-primary'));
+    check('抽数没变多，推荐的是取消',
+        dialog.querySelector('[data-mode="cancel"]').classList.contains('hh-modal-primary'));
+    check('合并按钮还在，用户仍然说了算',
+        !!dialog.querySelector('[data-mode="merge"]'));
+    check('日志里也提醒了一句',
+        /同源|已经合并过/.test(d.getElementById('lottery-log').textContent),
+        d.getElementById('lottery-log').textContent.slice(-200));
+
+    await choose(dialog, 'cancel');
+    check('取消之后数据一点没动',
+        JSON.parse(w.localStorage.getItem('hhanclub_lottery_stats_v4')).draws === 10);
+
+    /* --- 别人的备份：不同记录线、没有重合的大奖，不该报警 --- */
+    const friend = {
+        kind: 'hhclub-lottery-backup', version: 4,
+        originId: 'friend-origin', exportId: 'friend-export-1',
+        total: {
+            version: 4, draws: 7, cost: 14000,
+            gains: { beans: 1000 },
+            prizes: { beans: { count: 7, value: 1000, tiers: { '500 憨豆': 7 } } },
+            raw: { '魔力 500': 7 },
+            jackpots: [{ at: 1600000000000, text: '魔力 780000' }]
+        }
+    };
+
+    dialog = await openDialog(JSON.stringify(friend));
+    check('别人的记录不报警', !dialog.querySelector('.hh-modal-warn'),
+        dialog.textContent.replace(/\s+/g, ' ').slice(0, 200));
+    check('合并仍是推荐项',
+        dialog.querySelector('[data-mode="merge"]').classList.contains('hh-modal-primary'));
+    await choose(dialog, 'merge');
+    check('合并进来了，17 抽',
+        JSON.parse(w.localStorage.getItem('hhanclub_lottery_stats_v4')).draws === 17,
+        JSON.parse(w.localStorage.getItem('hhanclub_lottery_stats_v4')).draws);
+
+    /* --- 同一个文件再来一次 --- */
+    dialog = await openDialog(JSON.stringify(friend));
+    check('同一个文件第二次进来就被认出',
+        /已经合并过/.test(dialog.querySelector('.hh-modal-warn')?.textContent || ''),
+        dialog.textContent.replace(/\s+/g, ' ').slice(0, 200));
+    await choose(dialog, 'cancel');
+
+    /* --- 同一条记录线的新快照：换了 exportId 也躲不掉 --- */
+    const friendLater = JSON.parse(JSON.stringify(friend));
+    friendLater.exportId = 'friend-export-2';
+    friendLater.total.draws = 40;
+
+    dialog = await openDialog(JSON.stringify(friendLater));
+    check('换个文件编号但记录线没变，照样认出',
+        !!dialog.querySelector('.hh-modal-warn'),
+        dialog.textContent.replace(/\s+/g, ' ').slice(0, 200));
+    check('对方抽数更多时推荐覆盖，而不是取消',
+        dialog.querySelector('[data-mode="replace"]').classList.contains('hh-modal-primary'));
+    await choose(dialog, 'cancel');
+
+    /* --- 老备份没有编号，靠大奖时刻对表 --- */
+    const legacy = {
+        version: 4, draws: 5, cost: 10000,
+        gains: { beans: 0 }, prizes: {}, raw: {},
+        // 这一条的时刻和当前历史里的那条一模一样
+        jackpots: [{ at: 1700000000000, text: '魔力 780000' }]
+    };
+
+    dialog = await openDialog(JSON.stringify(legacy));
+    check('没有编号的老备份靠大奖时刻也能认出重合',
+        /大奖记录/.test(dialog.querySelector('.hh-modal-warn')?.textContent || ''),
+        dialog.textContent.replace(/\s+/g, ' ').slice(0, 200));
+    await choose(dialog, 'cancel');
+
+    check('前后这么多次弹窗，数据始终是 17 抽',
+        JSON.parse(w.localStorage.getItem('hhanclub_lottery_stats_v4')).draws === 17,
+        JSON.parse(w.localStorage.getItem('hhanclub_lottery_stats_v4')).draws);
+}
+
+/* ---------------------------------------------------------------- */
 console.log(`\n=========== ${passed} passed, ${failed} failed ===========\n`);
 process.exit(failed ? 1 : 0);

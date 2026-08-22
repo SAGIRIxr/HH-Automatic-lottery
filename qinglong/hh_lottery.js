@@ -585,6 +585,9 @@ function emptyStats() {
         gains: { beans: 0, magic: 0, invite: 0, rainbow: 0, vip: 0, makeup: 0, upload: 0, rename: 0 },
         prizes: {},
         raw: {},
+        /* 记录线编号。这个文件本身就是油猴版能直接导入的备份，
+           带上它，油猴版才认得出「同一份文件导了两遍」。 */
+        originId: null,
         firstAt: null,
         lastAt: null
     };
@@ -625,6 +628,8 @@ function normalizeStats(data) {
     });
 
     stats.raw = { ...(data.raw || {}) };
+
+    stats.originId = typeof data.originId === 'string' ? data.originId : null;
     return stats;
 }
 
@@ -705,11 +710,18 @@ function saveStats(current, total) {
     const file = statsPath();
     if (!file) return '';
 
+    // 头一次写就定下来，之后每次覆写都沿用同一个
+    if (!total.originId) {
+        total.originId = Math.random().toString(36).slice(2, 10)
+            + Date.now().toString(36).slice(-4);
+    }
+
     const payload = {
         kind: 'hhclub-lottery-backup',
         version: 4,
         exportedAt: new Date().toISOString(),
         source: 'qinglong',
+        originId: total.originId,
         current,
         total
     };
